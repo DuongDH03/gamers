@@ -1,0 +1,51 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "mingw",
+      "displayName": "MinGW GCC (Release)",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build/mingw",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "msvc",
+      "displayName": "Visual Studio 2022 (x64)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/msvc"
+    },
+    {
+      "name": "headless",
+      "displayName": "Headless only (no SDL3 download)",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build/headless",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SCRAPS_WITH_SDL3": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mingw", "configurePreset": "mingw", "jobs": 8 },
+    { "name": "msvc", "configurePreset": "msvc", "configuration": "Release" },
+    { "name": "headless", "configurePreset": "headless", "jobs": 8 },
+    {
+      "name": "mingw-game",
+      "displayName": "MinGW: only the game module (hot reload while the apps run)",
+      "configurePreset": "mingw",
+      "jobs": 8,
+      "targets": ["scraps_sandbox_module"]
+    },
+    {
+      "name": "msvc-game",
+      "displayName": "MSVC: only the game module (hot reload while the apps run)",
+      "configurePreset": "msvc",
+      "configuration": "Release",
+      "targets": ["scraps_sandbox_module"]
+    }
+  ],
+  "testPresets": [
+    { "name": "mingw", "configurePreset": "mingw", "output": { "outputOnFailure": true } },
+    { "name": "msvc", "configurePreset": "msvc", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "headless", "configurePreset": "headless", "output": { "outputOnFailure": true } }
+  ]
+}

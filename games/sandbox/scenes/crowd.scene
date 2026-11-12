@@ -1,0 +1,31 @@
+scraps-scene 1
+# Stage 4 stress scene: 1,000 wanderers bouncing around a field.
+# Zoom out with '-' to see them all; '=' zooms back in.
+
+view top-down
+size 64 48 1
+
+# Background: one colour, or top then bottom for a blend.
+sky 30 40 34
+
+# Sound effects (made by tools/make_sandbox_sounds.py). Any common format works;
+# these three are WAV, OGG and MP3 on purpose. The game plays them by name.
+sound jump sounds/jump.wav
+sound coin sounds/coin.ogg
+sound drop sounds/drop.mp3 volume 0.8
+
+image grass   art/grass.png   frames 3
+image hero    art/hero.png    frames 4 fps 10
+image critter art/critter.png frames 2 fps 4
+
+tile g grass solid 92 156 76 texture grass
+
+archetype hero     kind 1 size 0.7 0.7 0.9 color 235 90 70 speed 6 flags moves,collides sprite hero
+archetype wanderer kind 3 size 0.4 0.4 0.4 color 180 140 230 speed 3 flags moves,collides,bounces sprite critter
+
+player hero
+spawn 32.5 24.5 1
+
+crowd wanderer 1000
+
+fill 0 g

@@ -1,0 +1,67 @@
+scraps-scene 1
+# A side-scrolling climb. Left/right to run, Space (or W / Up) to jump.
+# The player stays in lane y = 0; lanes 1 and 2 are background scenery.
+# Falling into the pit sends you back to the start.
+
+view side
+size 40 3 10
+
+# Background: one colour, or top then bottom for a blend.
+sky 118 186 232 214 238 250
+
+# Sound effects (made by tools/make_sandbox_sounds.py). Any common format works;
+# these three are WAV, OGG and MP3 on purpose. The game plays them by name.
+sound jump sounds/jump.wav
+sound coin sounds/coin.ogg
+sound drop sounds/drop.mp3 volume 0.8
+
+image grass art/grass.png frames 3
+image stone art/stone.png frames 2
+image hill  art/hill.png
+image cloud art/cloud.png
+image hero  art/hero.png frames 4 fps 10
+image coin  art/coin.png frames 4 fps 8
+
+tile = ground solid 150 110 70  texture grass
+tile # stone  solid 130 130 140 texture stone
+tile h hill   decor 90  150 90  texture hill
+tile c cloud  decor 235 240 250 texture cloud
+
+archetype hero kind 1 size 0.7 0.6 0.9 color 235 90 70 speed 6 flags moves,gravity,collides sprite hero
+archetype coin kind 2 size 0.35 0.35 0.35 color 250 210 60 sprite coin
+
+player hero
+spawn 2.5 0.5 1
+
+entity coin 9.5 0.5 2.2
+entity coin 14.5 0.5 3.2
+entity coin 23.5 0.5 4.2
+entity coin 29.5 0.5 5.2
+entity coin 36.5 0.5 1.2
+
+# Each layer is one height (z). Its three rows are the lanes y = 0, 1, 2;
+# each row is 40 cells along x.
+layer 0
+==================...===================
+hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+layer 1
+........##......................##......
+..........hhhhhh........................
+hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+layer 2
+.............===........................
+........................................
+....hhhhhhhhhhhh........................
+layer 3
+......................====..............
+........................................
+........................................
+layer 4
+............................===.........
+........................................
+........................................
+layer 8
+........................................
+........................................
+.....ccc..........cccc..................
