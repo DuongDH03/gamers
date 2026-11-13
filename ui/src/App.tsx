@@ -11,13 +11,15 @@ export const NOTICE_MS = 2000;
 
 /**
  * What Esc (or the gamepad's east button in a menu) does on each screen:
- * playing -> pause (offline only), paused -> resume, settings -> back.
+ * playing -> pause, paused -> resume, settings -> back. Online, "pause"
+ * opens the same menu over a game that runs on (one player cannot stop the
+ * server), and "resume" closes it.
  */
 export function backAction(view: ViewMessage | null): ActionMessage | null {
   if (!view) return null;
   switch (view.screen) {
     case 'playing':
-      return view.online ? null : action.simple('pause');
+      return action.simple('pause');
     case 'paused':
       return action.simple('resume');
     case 'settings':
@@ -43,7 +45,9 @@ export function App({ bridge }: { bridge: Bridge }) {
   useEffect(() => {
     const onView = (v: ViewMessage) => {
       // A notice shows when it appears or changes; the same text repeated in
-      // the next views is the same notice, not a new one.
+      // the next views is the same notice, not a new one. Native sends one
+      // view without it ("") before the same text as a new notice (a second
+      // save in a row).
       if (v.notice !== '' && v.notice !== lastNotice.current) {
         toastId.current += 1;
         setToast({ id: toastId.current, text: v.notice });

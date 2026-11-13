@@ -9,6 +9,9 @@
 #            MSVC: the VC runtime) and SDL3.dll when SDL3 is a shared library
 #            (the bundled SDL3 is linked statically, so usually there is none)
 #            scenes/      the game's whole scenes folder (art, sounds, music)
+#            licenses/    the licences of what is linked in or shipped:
+#                         SDL3.txt (zlib) and, with scraps_web, WebView2.txt
+#                         (BSD-3-Clause)
 #            README.txt   how to run it, keys, command-line options
 #
 # The zip is Scraps-<game>-<version>-win64.zip. Release presets build with
@@ -45,6 +48,12 @@ endif()
 configure_file("${CMAKE_CURRENT_LIST_DIR}/README.txt.in" "${PROJECT_BINARY_DIR}/package/README.txt" @ONLY
                NEWLINE_STYLE CRLF)  # for Notepad
 install(FILES "${PROJECT_BINARY_DIR}/package/README.txt" DESTINATION .)
+
+# SDL3 is linked into the programs (statically, when it was downloaded):
+# its licence goes with them. apps/web/CMakeLists.txt adds WebView2's.
+if(SCRAPS_SDL3_LICENSE)
+  install(FILES "${SCRAPS_SDL3_LICENSE}" DESTINATION licenses RENAME SDL3.txt)
+endif()
 
 # The DLLs the executables load, found the way Windows will look for them,
 # with the compiler's own folder searched before PATH (another libstdc++ on

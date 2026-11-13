@@ -166,8 +166,8 @@ inline bool check_game_api(const scraps::GameApi* api, std::string& error) {
     return false;
   }
   for (std::size_t i = 0; i < api->ui_command_count; ++i) {
-    // A short name of letters, digits, '_' and '-' (it travels inside JSON
-    // and is compared byte for byte), unique, for a command a client may send.
+    // A short name, a letter then letters, digits or '_' (it travels inside
+    // JSON and is compared byte for byte), unique, for a command a client may send.
     const scraps::GameUiCommand& command = api->ui_commands[i];
     bool valid = is_ui_command_name(command.name) && command.command != scraps::CommandType::kNone &&
                  !scraps::is_server_only(command.command);

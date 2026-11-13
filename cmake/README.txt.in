@@ -13,8 +13,9 @@ Double-click scraps_client.exe, or from a command prompt in this folder:
 
 scraps_web.exe is the same game with menus (Play, Continue, Pause, Save,
 Load, Settings with music and effects volume) and an on-screen HUD. It needs
-the Microsoft Edge WebView2 runtime, which Windows 11 already has; Esc opens
-and closes the menus there.
+the Microsoft Edge WebView2 runtime, which Windows 11 already has. Esc opens
+and closes the menus there; online the menu opens over a game that goes on
+(Resume, Settings, Quit), since one player cannot stop the server.
 
 Playing together (5 to 10 players): one person runs the server, everyone
 else connects to it.
@@ -68,3 +69,9 @@ scraps_server
 
 Scenes are plain text files in scenes\. Edit one while the game runs and it
 reloads.
+
+Licences
+--------
+licenses\ holds the licences of the libraries in this release: SDL3.txt
+(SDL3, zlib licence, built into the programs) and, with scraps_web.exe,
+WebView2.txt (the Microsoft WebView2 SDK, BSD 3-Clause licence).

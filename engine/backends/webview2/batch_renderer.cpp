@@ -1,5 +1,6 @@
 #include "backends/webview2/batch_renderer.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "backends/webview2/debug_font.h"
@@ -11,9 +12,12 @@ namespace {
 
 constexpr std::uint32_t kOpTriangles = static_cast<std::uint32_t>(FrameOp::kTriangles);
 constexpr std::uint32_t kOpLines = static_cast<std::uint32_t>(FrameOp::kLines);
-// A single texture is at most a quarter of the largest slot, so it always
-// fits in a frame with room for the draws.
-constexpr std::size_t kMaxTextureBytes = kMaxSlotBytes / 4;
+// The bytes before a texture's pixels (op, id, width, height), and a destroy command.
+constexpr std::size_t kTextureCommandBytes = 16;
+constexpr std::size_t kDestroyCommandBytes = 8;
+// No frame limit is smaller than this (room for a header, a clear and a texture).
+constexpr std::size_t kMinFrameBytes = 4096;
+static_assert(BatchRenderer::kMaxFrameBytes == kMaxSlotBytes, "a frame fills at most one slot");
 
 // The debug font as SDL lays it out (SDL_render.c, CreateDebugTextAtlas):
 // 14 glyphs per row, each in a 10x10 cell with a 1-pixel border.
@@ -60,6 +64,13 @@ int glyph_for(std::uint32_t code) {
 
 }  // namespace
 
+BatchRenderer::BatchRenderer(FrameSink* sink, std::size_t max_frame_bytes)
+    : m_sink(sink),
+      m_max_frame(std::max(kMinFrameBytes, std::min(max_frame_bytes, kMaxSlotBytes))),
+      m_max_texture(m_max_frame / 4),
+      // Room beside the largest texture command: every frame can carry one.
+      m_max_draws(m_max_frame - kFrameHeaderBytes - kTextureCommandBytes - m_max_frame / 4) {}
+
 void BatchRenderer::set_output_size(int width, int height) {
   if (width > 0 && height > 0 && width <= static_cast<int>(kMaxTextureSide) &&
       height <= static_cast<int>(kMaxTextureSide)) {
@@ -97,7 +108,7 @@ TextureId BatchRenderer::create_texture(int width, int height, const std::uint8_
     return kNoTexture;
   }
   const std::size_t bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
-  if (bytes > kMaxTextureBytes) return kNoTexture;
+  if (bytes > m_max_texture) return kNoTexture;
   Texture texture;
   texture.width = static_cast<std::uint32_t>(width);
   texture.height = static_cast<std::uint32_t>(height);
@@ -129,9 +140,11 @@ void BatchRenderer::begin_frame(Color clear_color) {
 }
 
 bool BatchRenderer::open_batch(std::uint32_t op, TextureId texture, std::size_t vertices) {
-  // Header, queued resources, the draws so far, this batch: all in one slot.
-  const std::size_t needed = kFrameHeaderBytes + m_resources.size() + m_draws.size() + 12 + vertices * kVertexBytes;
-  if (vertices > kMaxSlotBytes / kVertexBytes || needed > kMaxSlotBytes) return false;
+  // The draws so far and this batch, within the draws' share of a frame
+  // (queued resources go over several frames if they must).
+  if (vertices > m_max_draws / kVertexBytes) return false;
+  const std::size_t needed = m_draws.size() + 12 + vertices * kVertexBytes;
+  if (needed > m_max_draws) return false;
   if (m_batch_op == op && m_batch_texture == texture &&
       m_batch_count <= 0xFFFFFFFFu - static_cast<std::uint32_t>(vertices)) {
     m_batch_count += static_cast<std::uint32_t>(vertices);
@@ -214,30 +227,45 @@ void BatchRenderer::draw_debug_text(float x, float y, const char* text, Color co
   }
 }
 
+std::size_t BatchRenderer::resources_fitting(std::size_t room) const {
+  std::size_t at = 0;
+  while (at + 4 <= m_resources.size()) {
+    std::size_t size = kDestroyCommandBytes;
+    if (read_u32(m_resources.data() + at) == static_cast<std::uint32_t>(FrameOp::kTexture)) {
+      // Written by queue_texture() from a checked texture: the sizes are sound.
+      size = kTextureCommandBytes + static_cast<std::size_t>(read_u32(m_resources.data() + at + 8)) *
+                                        read_u32(m_resources.data() + at + 12) * 4;
+    }
+    if (at + size > m_resources.size() || at + size > room) break;
+    at += size;
+  }
+  return at;
+}
+
 void BatchRenderer::end_frame() {
   if (!m_recording) {
     ++m_frames_dropped;
     return;
   }
   m_recording = false;
-  const std::size_t total = kFrameHeaderBytes + m_resources.size() + m_draws.size();
+  // As many queued resources as fit beside the draws (all of them, but for
+  // a burst of big textures); the rest go with the next frames.
+  const std::size_t resources = resources_fitting(m_max_frame - kFrameHeaderBytes - m_draws.size());
+  const std::size_t total = kFrameHeaderBytes + resources + m_draws.size();
   m_frame.clear();
-  if (total > kMaxSlotBytes) {
-    ++m_frames_dropped;
-    return;
-  }
   put_u32(m_frame, kFrameMagic);
   put_u32(m_frame, kFormatVersion);
   put_u32(m_frame, m_next_seq);
   put_u32(m_frame, static_cast<std::uint32_t>(total));
   put_u32(m_frame, static_cast<std::uint32_t>(m_width));
   put_u32(m_frame, static_cast<std::uint32_t>(m_height));
-  put_u32(m_frame, static_cast<std::uint32_t>(kFrameHeaderBytes + m_resources.size()));
+  put_u32(m_frame, static_cast<std::uint32_t>(kFrameHeaderBytes + resources));
   put_u32(m_frame, 0);
-  m_frame.insert(m_frame.end(), m_resources.begin(), m_resources.end());
+  const auto sent_end = m_resources.begin() + static_cast<std::ptrdiff_t>(resources);
+  m_frame.insert(m_frame.end(), m_resources.begin(), sent_end);
   m_frame.insert(m_frame.end(), m_draws.begin(), m_draws.end());
   if (m_sink->take_frame(m_frame.data(), m_frame.size(), m_next_seq)) {
-    m_resources.clear();
+    m_resources.erase(m_resources.begin(), sent_end);  // in place: no allocation
     ++m_next_seq;
     ++m_frames_sent;
   } else {

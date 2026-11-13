@@ -10,7 +10,12 @@ endif()
 # to the console it was started from, if any (attach_parent_console).
 add_executable(scraps_web WIN32 main.cpp)
 target_link_libraries(scraps_web PRIVATE scraps_client_lib scraps_webview2 scraps_sdl3)
-target_compile_definitions(scraps_web PRIVATE "SCRAPS_WEB_UI_BUILD_DIR=\"${SCRAPS_UI_DIST}\"")
+# Development builds find the UI in this build folder; release builds
+# (SCRAPS_HOT_RELOAD off) carry no path of the build machine and look only
+# next to the exe (or --ui-dir).
+if(SCRAPS_HOT_RELOAD)
+  target_compile_definitions(scraps_web PRIVATE "SCRAPS_WEB_UI_BUILD_DIR=\"${SCRAPS_UI_DIST}\"")
+endif()
 if(MSVC)
   target_link_options(scraps_web PRIVATE /ENTRY:mainCRTStartup)  # main(), not WinMain()
 endif()
@@ -30,18 +35,24 @@ endif()
 # the runtime DLLs it needs).
 install(TARGETS scraps_web RUNTIME DESTINATION .)
 install(DIRECTORY "${SCRAPS_UI_DIST}/" DESTINATION ui OPTIONAL)
+# The WebView2 SDK's licence (BSD-3-Clause): its loader is linked in (MSVC)
+# or shipped (MinGW).
+install(FILES "${SCRAPS_WEBVIEW2_LICENSE}" DESTINATION licenses RENAME WebView2.txt)
 if(SCRAPS_WEBVIEW2_LOADER_DLL)
   install(FILES "${SCRAPS_WEBVIEW2_LOADER_DLL}" DESTINATION .)
 endif()
 
 # End to end, in a real window (needs a desktop session): the page loads,
 # gets the view, Play is pressed, the page draws 120 frames, and the canvas
-# has the world on it. 77 = skipped (no WebView2 runtime).
+# has the world on it. 77 = skipped (no WebView2 runtime, or no desktop to
+# draw on). The WebView2 profile stays in this build folder. TIMEOUT is
+# longer than WebView2's start (30 s) and the self-test (90 s) together.
 set(scraps_web_test_dir "${CMAKE_CURRENT_BINARY_DIR}/web_test")
 file(MAKE_DIRECTORY "${scraps_web_test_dir}")
 add_test(NAME web_window_self_test
          COMMAND scraps_web --self-test --save-dir "${scraps_web_test_dir}/saves"
+                 --user-data-dir "${scraps_web_test_dir}/webview2-profile"
                  --screenshot "${scraps_web_test_dir}/self-test.png")
 set_tests_properties(web_window_self_test PROPERTIES
-                     LABELS window SKIP_RETURN_CODE 77 TIMEOUT 120
+                     LABELS window SKIP_RETURN_CODE 77 TIMEOUT 180
                      FAIL_REGULAR_EXPRESSION "FAILED|timed out")

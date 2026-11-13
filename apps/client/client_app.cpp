@@ -9,7 +9,6 @@
 #include "client/client_app.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -232,6 +231,13 @@ Vec3 focus_point(const World& shown, EntityId me_id) {
 // turns a character cut in half into '?').
 constexpr std::size_t kUiNoticeBytes = 255;
 
+// A reload message for the UI: what happened, without the details after
+// ": " (an error, which may name files; the console has it all).
+std::string headline(const std::string& message) {
+  const std::size_t details = message.find(": ");
+  return details == std::string::npos ? message : message.substr(0, details) + "; see the console";
+}
+
 }  // namespace
 
 // Everything run() used to keep in local variables, in the same order, so
@@ -263,8 +269,17 @@ struct ClientApp::State {
   static constexpr std::size_t kAudioAheadFrames = kSoundSampleRate * 60 / 1000;
   std::vector<float> mix_buffer = std::vector<float>(kAudioAheadFrames * kSoundChannels);
   std::size_t sounds_played = 0;
-  std::string notice;  // a short message on the HUD (reloads, art errors)
+  // A short message: `notice` on the debug HUD (and the console), and
+  // `notice_for_ui` for the UI, which names no paths (long, and they may
+  // show the player's user name). Shown until `notice_until`.
+  std::string notice;
+  std::string notice_for_ui;
   double notice_until = 0.0;
+  // Each notice shown counts, so the same text twice (two saves in a row)
+  // is shown twice: the UI shows a notice when its text changes, so it is
+  // given "" for one view in between (the bridge protocol stays as it is).
+  std::uint32_t notice_serial = 0;
+  std::uint32_t notice_serial_in_ui = 0;
   FixedStepClock clock;
   // Offline only: pause (P) and the quick save slot (F5 saves, F9 loads).
   OfflinePause pause;
@@ -285,17 +300,31 @@ struct ClientApp::State {
   UiRequests requests;
   NoInput no_input;
   bool game_had_input = true;
-  char ui_notice[kUiNoticeBytes + 1] = {};
+  char ui_notice[kUiNoticeBytes + 1] = {};  // the notice in the last view given to the UI
+
+  void show_notice(std::string text, double seconds, std::string text_for_ui) {
+    notice = std::move(text);
+    notice_for_ui = std::move(text_for_ui);
+    notice_until = now + seconds;
+    ++notice_serial;
+  }
+  void show_notice(const std::string& text, double seconds) { show_notice(text, seconds, text); }
+
+  // Whenever the game controls lose what they latched (the game gains or
+  // loses the input, or a load), the UI's queued game commands go too.
+  void drop_latched_input() {
+    controls.clear_latches();
+    ui->clear_commands();
+  }
 
   // P, a gamepad's start button, or the UI: the one place that pauses and
   // resumes (common/pause.h), with its notice.
   void set_paused(bool paused) {
     if (!pause.set(paused, session.server.get(), *session.client, clock)) {
-      notice = "pause works offline only";
+      show_notice("pause works offline only", 2.0);
     } else {
-      notice = pause.paused() ? "paused" : "resumed";
+      show_notice(pause.paused() ? "paused" : "resumed", 2.0);
     }
-    notice_until = now + 2.0;
   }
 
   // F5 (save) or F9 (load), and the UI's save, load and continue: one path.
@@ -304,17 +333,21 @@ struct ClientApp::State {
   bool save_or_load(bool save) {
     bool worked = false;
     std::string save_error;
+    std::string text;
+    std::string text_for_ui;
     if (!session.server) {
-      notice = "save and load work offline only";
+      text = text_for_ui = "save and load work offline only";
     } else if (save) {
       if (save_game(*session.server, session.game.name(), quick_save_path, save_error)) {
         ++stats.saves;
         has_save = true;
         worked = true;
-        notice = "saved to " + quick_save_path;
+        text = "saved to " + quick_save_path;
+        text_for_ui = "saved";
       } else {
         ++stats.save_errors;
-        notice = "save failed: " + save_error;
+        text = "save failed: " + save_error;
+        text_for_ui = "save failed: " + save_error_for_ui(save_error, quick_save_path);
       }
     } else {
       SaveHeader header;
@@ -322,20 +355,26 @@ struct ClientApp::State {
           load_game(*session.server, session.game.name(), options.scene_dir, quick_save_path, header, save_error);
       if (result == SaveLoad::kRefused) {
         ++stats.save_errors;
-        notice = "load failed: " + save_error;
+        text = "load failed: " + save_error;
+        text_for_ui = "load failed: " + save_error_for_ui(save_error, quick_save_path);
       } else {
         ++stats.loads;
         worked = true;
         pause.set(false, session.server.get(), *session.client, clock);  // a loaded game starts running
-        notice = "loaded " + quick_save_path + " (tick " + std::to_string(header.tick) + ")";
+        // Nothing pressed or queued for the old game acts in the loaded one.
+        drop_latched_input();
+        text = "loaded " + quick_save_path + " (tick " + std::to_string(header.tick) + ")";
+        text_for_ui = "loaded";
         if (result == SaveLoad::kSceneChanged) {
-          notice += "; warning: the scene file changed since this save";
+          const char* warning = "; warning: the scene file changed since this save";
+          text += warning;
+          text_for_ui += warning;
         }
       }
     }
-    std::printf("%s\n", notice.c_str());
+    std::printf("%s\n", text.c_str());
     std::fflush(stdout);
-    notice_until = now + 4.0;
+    show_notice(std::move(text), 4.0, std::move(text_for_ui));
     return worked;
   }
 
@@ -394,8 +433,8 @@ bool ClientApp::start(std::string& error) {
   s.session.game.install(s.game_targets);
   if (s.session.game.hot()) {
     // Where hot reload looks, and how to feed it.
-    s.notice = std::string("hot game: rebuild with ") + selected_game().build_command;
-    s.notice_until = 8.0;
+    const std::string text = std::string("hot game: rebuild with ") + selected_game().build_command;
+    s.show_notice(text, 8.0);
   }
   if (s.session.server) {
     s.quick_save_path = save_directory(s.options, s.session.game.name()) + "quick.sav";
@@ -445,8 +484,7 @@ bool ClientApp::frame(double now, double wall_seconds) {
   if (input.gamepad_connected() != s.gamepad_was_connected) {
     // Controls read the pad through Input like the keys; this only says so.
     s.gamepad_was_connected = input.gamepad_connected();
-    s.notice = s.gamepad_was_connected ? "gamepad connected" : "gamepad disconnected";
-    s.notice_until = now + 3.0;
+    s.show_notice(s.gamepad_was_connected ? "gamepad connected" : "gamepad disconnected", 3.0);
     std::printf("%s\n", s.notice.c_str());
   }
 
@@ -467,8 +505,7 @@ bool ClientApp::frame(double now, double wall_seconds) {
   std::string message;
   if (session.reloader && session.server && session.reloader->poll(now, *session.server, message)) {
     std::printf("%s\n", message.c_str());
-    s.notice = message;
-    s.notice_until = now + 4.0;
+    s.show_notice(message, 4.0, headline(message));
   }
   // Hot game code: a rebuilt module replaces the running game code here,
   // between frames (no tick or job runs now). The World stays. The file is
@@ -477,8 +514,7 @@ bool ClientApp::frame(double now, double wall_seconds) {
   if (session.game.hot() && session.game.poll(wall_seconds, s.game_targets, message) != GameReload::kNone) {
     std::printf("%s\n", message.c_str());
     std::fflush(stdout);
-    s.notice = message;
-    s.notice_until = now + 4.0;
+    s.show_notice(message, 4.0, headline(message));
   }
 
   // A new world (first connection or a reload) brings its own images and sounds.
@@ -487,18 +523,15 @@ bool ClientApp::frame(double now, double wall_seconds) {
     std::string errors;
     if (!s.sprites.load(client.current_world().level, options.scene_dir, *platform.renderer, errors)) {
       std::fprintf(stderr, "some images failed to load (drawn as flat colours):\n%s", errors.c_str());
-      s.notice = "some images failed to load; see the console";
-      s.notice_until = now + 6.0;
+      s.show_notice("some images failed to load; see the console", 6.0);
     }
     if (!s.sounds.load(client.current_world().level, options.scene_dir, s.mixer, errors)) {
       std::fprintf(stderr, "some sounds failed to load (they stay silent):\n%s", errors.c_str());
-      s.notice = "some sounds failed to load; see the console";
-      s.notice_until = now + 6.0;
+      s.show_notice("some sounds failed to load; see the console", 6.0);
     }
     if (!s.music.update(client.current_world().level, options.scene_dir, s.mixer, errors)) {
       std::fprintf(stderr, "the music failed to load (it stays silent): %s\n", errors.c_str());
-      s.notice = "the music failed to load; see the console";
-      s.notice_until = now + 6.0;
+      s.show_notice("the music failed to load; see the console", 6.0);
     }
   }
 
@@ -556,10 +589,12 @@ bool ClientApp::frame(double now, double wall_seconds) {
     }
   }
   // Whenever the game gains or loses the input (resume, play, continue, a
-  // load, a menu opening), presses latched before do not act afterwards.
+  // load, a menu opening), presses latched before do not act afterwards,
+  // and neither do the UI's game buttons pressed before (a HUD button and P
+  // in the same frame).
   if (s.game_has_input() != s.game_had_input) {
     s.game_had_input = s.game_has_input();
-    s.controls.clear_latches();
+    s.drop_latched_input();
   }
 
   const int steps = running ? s.pause.advance(s.clock, frame_seconds) : 0;
@@ -685,7 +720,16 @@ bool ClientApp::frame(double now, double wall_seconds) {
 
   // The UI hears about what changed (nothing is posted when nothing did).
   if (s.ui_present) {
-    const char* notice = now < s.notice_until ? s.notice.c_str() : "";
+    const char* notice = now < s.notice_until ? s.notice_for_ui.c_str() : "";
+    if (s.notice_serial != s.notice_serial_in_ui) {
+      if (notice[0] != '\0' && std::strcmp(notice, s.ui_notice) == 0) {
+        // The UI shows this text already, from the notice before: a view
+        // without it first, then (next frame) this one, as a new notice.
+        notice = "";
+      } else {
+        s.notice_serial_in_ui = s.notice_serial;
+      }
+    }
     std::size_t length = std::strlen(notice);
     if (length > kUiNoticeBytes) length = kUiNoticeBytes;
     std::memcpy(s.ui_notice, notice, length);

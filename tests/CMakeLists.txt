@@ -70,9 +70,12 @@ if(SCRAPS_NODE)
                        FIXTURES_REQUIRED webview2_frame LABELS js)
 endif()
 # The React app's own tests (Vitest), once the build has installed its packages.
+# Through the ui/ lock (cmake/ScrapsNpm.cmake), so another preset's `npm ci`
+# never replaces node_modules/ under it.
 if(SCRAPS_UI_TARGET AND SCRAPS_NODE)
-  add_test(NAME ui_tests COMMAND "${SCRAPS_NODE}" "${PROJECT_SOURCE_DIR}/ui/node_modules/vitest/vitest.mjs" run
-           WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/ui")
+  add_test(NAME ui_tests
+           COMMAND ${CMAKE_COMMAND} -DSTEP=test "-DNODE=${SCRAPS_NODE}" "-DUI_DIR=${PROJECT_SOURCE_DIR}/ui"
+                   -P "${PROJECT_SOURCE_DIR}/cmake/ScrapsNpm.cmake")
   set_tests_properties(ui_tests PROPERTIES LABELS "js;ui" TIMEOUT 300)
 endif()
 
@@ -119,10 +122,33 @@ if(WIN32)
       set(scraps_expect_loader ON)
     endif()
   endif()
+  # The licences the release must carry (comma-separated).
+  set(scraps_expect_licenses "")
+  if(SCRAPS_SDL3_LICENSE)
+    list(APPEND scraps_expect_licenses SDL3.txt)
+  endif()
+  if(TARGET scraps_web)
+    list(APPEND scraps_expect_licenses WebView2.txt)
+  endif()
+  list(JOIN scraps_expect_licenses "," scraps_expect_licenses)
   add_test(NAME package_runs
            COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${PROJECT_BINARY_DIR} -DCONFIG=$<CONFIG>
                    -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/package_work -DEXPECT_WEB=${scraps_expect_web}
                    -DEXPECT_WEBVIEW2_LOADER=${scraps_expect_loader}
+                   "-DEXPECT_LICENSES=${scraps_expect_licenses}"
                    -P ${PROJECT_SOURCE_DIR}/cmake/TestPackageRuns.cmake)
   set_tests_properties(package_runs PROPERTIES LABELS package)
+  if(TARGET scraps_web)
+    # The installed scraps_web, started from a non-ASCII folder with PATH cut
+    # to Windows' own: it finds its UI and loader and draws (--self-test).
+    # A real window, so it is labelled `window` and skipped without a desktop
+    # (or the WebView2 runtime). Its own work folder: it runs beside package_runs.
+    add_test(NAME package_web_runs
+             COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${PROJECT_BINARY_DIR} -DCONFIG=$<CONFIG>
+                     -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/package_web_work -DRUN_WEB=ON
+                     -P ${PROJECT_SOURCE_DIR}/cmake/TestPackageRuns.cmake)
+    set_tests_properties(package_web_runs PROPERTIES
+                         LABELS "package;window" TIMEOUT 240
+                         SKIP_REGULAR_EXPRESSION "scraps_web self-test: skipped")
+  endif()
 endif()

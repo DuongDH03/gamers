@@ -1,7 +1,8 @@
 // A pretend game for working on the UI in a normal browser (`npm run dev`).
 // It answers actions the way the native app does: coins go up while playing,
-// pause and resume, save and load with notices, has_save after a save, and
-// volumes. Its view messages go through the same validation as real ones.
+// pause and resume (online the menu opens and the game runs on), save and
+// load with notices, has_save after a save, and volumes. Its view messages
+// go through the same validation as real ones.
 
 import {
   clampVolume,
@@ -43,7 +44,7 @@ export function createMockBridge(options: MockOptions = {}): Bridge {
       screen: state.screen,
       game: state.game,
       hud: `coins ${state.coins}`,
-      paused: state.screen === 'paused',
+      paused: !online && state.screen === 'paused',
       has_save: state.savedCoins !== null,
       online,
       music_volume: state.music,
@@ -76,7 +77,8 @@ export function createMockBridge(options: MockOptions = {}): Bridge {
         state.notice = 'loaded';
         break;
       case 'pause':
-        if (online || state.screen !== 'playing') return;
+        // Online: the menu opens over a game that runs on (not paused).
+        if (state.screen !== 'playing') return;
         state.screen = 'paused';
         break;
       case 'resume':
@@ -135,7 +137,8 @@ export function createMockBridge(options: MockOptions = {}): Bridge {
   let timer: ReturnType<typeof setInterval> | null = null;
   if (tickMs > 0) {
     timer = setInterval(() => {
-      if (state.screen !== 'playing') return;
+      const running = state.screen === 'playing' || (online && state.screen === 'paused');
+      if (!running) return;
       state.coins += 1;
       emit();
     }, tickMs);

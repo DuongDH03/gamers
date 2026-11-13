@@ -491,33 +491,187 @@ void frame_flow_never_writes_a_slot_the_page_may_read(test::Context& ctx) {
   CHECK(!flow.on_request(request));  // a page without the buffer
   CHECK(flow.page_width() == 800 && !flow.take_request());
   request.generation = 1;
-  CHECK(flow.on_request(request) && flow.take_request() && !flow.take_request());
+  CHECK(flow.on_request(request));
+  CHECK(!flow.can_send());  // asked, but no frame was run for the request yet
+  CHECK(flow.take_request() && !flow.take_request());
   CHECK(flow.can_send());
   flow.sent(1);
-  CHECK(flow.can_send());  // one unacked frame: the next goes to another slot
+  CHECK(!flow.can_send());  // answered: one frame per request
+  flow.frame_done();
+  // Each request answered with one frame: two may be out, not yet drawn.
+  CHECK(flow.on_request(request) && flow.take_request() && flow.can_send());
   flow.sent(2);
+  flow.frame_done();
+  CHECK(flow.on_request(request) && flow.take_request());
   CHECK(!flow.can_send());  // two unacked: the page may read either slot; wait for an ack
+  flow.frame_done();
   CHECK(FrameFlow::slot_for(1) != FrameFlow::slot_for(2) && FrameFlow::slot_for(1) == FrameFlow::slot_for(4));
   request.acked = 1;
-  CHECK(flow.on_request(request) && flow.can_send() && flow.frames_drawn() == 1);
+  CHECK(flow.on_request(request) && flow.take_request() && flow.can_send() && flow.frames_drawn() == 1);
   flow.sent(3);
-  CHECK(!flow.can_send());
+  flow.frame_done();
+  CHECK(flow.on_request(request) && flow.take_request() && !flow.can_send());
+  flow.frame_done();
   // A hostile or stale ack: not counted.
   request.acked = 99;
   flow.on_request(request);
-  CHECK(!flow.can_send() && flow.last_acked() == 1);
+  CHECK(flow.take_request() && !flow.can_send() && flow.last_acked() == 1);
+  flow.frame_done();
   request.acked = 3;  // the page skipped 2 (it draws the newest)
   flow.on_request(request);
-  CHECK(flow.can_send() && flow.last_acked() == 3);
+  CHECK(flow.take_request() && flow.can_send() && flow.last_acked() == 3);
+  flow.frame_done();
   // A reload: nothing until the new page holds the new generation.
   flow.page_gone();
-  CHECK(!flow.can_send());
+  CHECK(!flow.take_request() && !flow.can_send());
   CHECK(flow.new_generation() == 2);
   request.generation = 1;
-  CHECK(!flow.on_request(request) && !flow.can_send());
+  CHECK(!flow.on_request(request) && !flow.take_request() && !flow.can_send());
   request.generation = 2;
   request.acked = 0;
-  CHECK(flow.on_request(request) && flow.can_send());
+  CHECK(flow.on_request(request) && flow.take_request() && flow.can_send());
+  // A new buffer while a request is being answered (a frame outgrew the
+  // slots): that frame sends nothing; the page asks again for the new one.
+  flow.new_generation();
+  CHECK(!flow.can_send());
+}
+
+// A FrameSink that is the window's flow control, as in webview2_backend.cpp.
+class FlowSink final : public FrameSink {
+ public:
+  bool can_take_frame() const override { return flow.can_send(); }
+  bool take_frame(const std::uint8_t*, std::size_t, std::uint32_t seq) override {
+    if (!flow.can_send()) return false;
+    flow.sent(seq);
+    seqs.push_back(seq);
+    return true;
+  }
+  FrameFlow flow;
+  std::vector<std::uint32_t> seqs;
+};
+
+// The pacing rule (scraps_web's loop): a frame is recorded and sent only to
+// answer a request the page made; the frames the app runs anyway when no
+// request comes (a hidden or minimised page) send nothing and record
+// nothing, but the textures they create wait for the next answered frame.
+void only_requested_frames_are_sent(test::Context& ctx) {
+  FlowSink sink;
+  BatchRenderer renderer(&sink);
+  FrameRequest request;
+  request.width = 640;
+  request.height = 360;
+  request.generation = sink.flow.new_generation();
+  auto frame = [&renderer]() {
+    renderer.begin_frame(Color());
+    renderer.fill_rect(RectF(), Color());
+    renderer.end_frame();
+  };
+
+  // The page holds the buffer and asked once: one frame answers it.
+  CHECK(sink.flow.on_request(request));
+  CHECK(sink.flow.take_request());
+  frame();
+  CHECK(sink.seqs.size() == 1 && renderer.frames_sent() == 1);
+  sink.flow.frame_done();
+  // No new request: fallback frames (the 20 ms timeout) tick, but send nothing,
+  // even though a slot is free.
+  const std::uint8_t pixel[4] = {9, 9, 9, 255};
+  const TextureId made_meanwhile = renderer.create_texture(1, 1, pixel);
+  for (int i = 0; i < 5; ++i) {
+    frame();
+    sink.flow.frame_done();
+  }
+  CHECK(sink.seqs.size() == 1 && renderer.frames_dropped() == 5);
+  CHECK(renderer.queued_resource_bytes() > 0);  // the texture waits
+  // A request that arrived while a frame ran is answered by the next frame.
+  request.acked = 1;
+  CHECK(sink.flow.on_request(request));
+  frame();  // this frame did not take it: nothing
+  CHECK(sink.seqs.size() == 1);
+  sink.flow.frame_done();
+  CHECK(sink.flow.take_request());
+  frame();
+  CHECK(sink.seqs.size() == 2 && sink.seqs[1] == 2);
+  CHECK(renderer.queued_resource_bytes() == 0);  // the texture went with it
+  DecodedFrame decoded;
+  CHECK(decode_frame(renderer.last_frame().data(), renderer.last_frame().size(), decoded));
+  CHECK(!decoded.commands.empty() && decoded.commands[0].op == FrameOp::kTexture &&
+        decoded.commands[0].texture == made_meanwhile);
+  // Two frames for one request: the second sends nothing.
+  frame();
+  CHECK(sink.seqs.size() == 2);
+}
+
+// Resources that do not fit in one frame (a burst of big textures) go over
+// several, in order, as many whole ones as fit; every frame still carries
+// its draws, so nothing stalls. Before, the whole queue had to fit in one
+// frame, and a queue past the slot limit dropped every frame forever.
+void resources_too_big_for_one_frame_go_over_several(test::Context& ctx) {
+  constexpr std::size_t kLimit = 64 * 1024;  // a small frame limit, as a 64 MB slot is to real textures
+  RecordingSink sink;
+  BatchRenderer renderer(&sink, kLimit);
+  // Each 64x64 texture is 16 KB, a quarter of a frame: the largest allowed.
+  std::vector<std::uint8_t> too_big(64 * 65 * 4, 200);
+  CHECK(renderer.create_texture(64, 65, too_big.data()) == kNoTexture);  // over a quarter of a frame
+  std::vector<std::uint8_t> pixels(64 * 64 * 4, 200);
+  std::vector<TextureId> made;
+  for (int i = 0; i < 10; ++i) {
+    pixels[0] = static_cast<std::uint8_t>(i);
+    made.push_back(renderer.create_texture(64, 64, pixels.data()));
+  }
+  CHECK(made.size() == 10 && made.back() != kNoTexture);
+  renderer.destroy_texture(made[3]);
+  CHECK(renderer.queued_resource_bytes() > kLimit * 2);
+
+  // Each frame also draws a lot: most of what the draws may use.
+  std::vector<Vertex2D> vertices(3 * 600);
+  std::vector<TextureId> uploaded;
+  bool destroyed_after_upload = false;
+  int frames = 0;
+  while (renderer.queued_resource_bytes() > 0 && frames < 50) {
+    renderer.begin_frame(Color());
+    renderer.fill_triangles(vertices.data(), vertices.size(), made[0]);
+    renderer.end_frame();
+    ++frames;
+    CHECK(sink.frames.size() == static_cast<std::size_t>(frames));  // never dropped
+    if (sink.frames.size() != static_cast<std::size_t>(frames)) return;
+    const std::vector<std::uint8_t>& bytes = sink.frames.back();
+    CHECK(bytes.size() <= kLimit);
+    DecodedFrame decoded;
+    CHECK(decode_frame(bytes.data(), bytes.size(), decoded));
+    bool has_draw = false;
+    bool has_resource = false;
+    for (const DecodedCommand& command : decoded.commands) {
+      if (command.op == FrameOp::kTexture) {
+        uploaded.push_back(command.texture);
+        has_resource = true;
+      } else if (command.op == FrameOp::kDestroyTexture) {
+        destroyed_after_upload = command.texture == made[3] && uploaded.size() == 10;
+        has_resource = true;
+      } else if (command.op == FrameOp::kTriangles) {
+        has_draw = command.count == vertices.size();
+      }
+    }
+    CHECK(has_draw && has_resource);  // the queue drains every frame, beside full draws
+  }
+  CHECK(renderer.queued_resource_bytes() == 0 && frames > 2 && frames < 12);
+  CHECK(uploaded == made);  // every texture, once, in order
+  CHECK(destroyed_after_upload);  // the destroy after the uploads, as queued
+  CHECK(renderer.frames_dropped() == 0);
+
+  // A frame the page does not take keeps what it would have carried.
+  renderer.resend_textures();
+  const std::size_t queued = renderer.queued_resource_bytes();
+  sink.accept = false;
+  renderer.begin_frame(Color());
+  renderer.end_frame();
+  CHECK(renderer.queued_resource_bytes() == queued);
+  sink.accept = true;
+  for (int i = 0; i < 10 && renderer.queued_resource_bytes() > 0; ++i) {
+    renderer.begin_frame(Color());
+    renderer.end_frame();
+  }
+  CHECK(renderer.queued_resource_bytes() == 0);
 }
 
 // ------------------------------------------------------------ Esc, P and start
@@ -660,5 +814,8 @@ void register_webview2_tests(test::Registry& registry) {
   registry.add("webview2.page_ui_keeps_the_view_and_sends_it_again", page_ui_keeps_the_view_and_sends_it_again);
   registry.add("webview2.frame_flow_never_writes_a_slot_the_page_may_read",
                frame_flow_never_writes_a_slot_the_page_may_read);
+  registry.add("webview2.only_requested_frames_are_sent", only_requested_frames_are_sent);
+  registry.add("webview2.resources_too_big_for_one_frame_go_over_several",
+               resources_too_big_for_one_frame_go_over_several);
   registry.add("webview2.esc_p_and_start_toggle_the_pause_menu_once", esc_p_and_start_toggle_the_pause_menu_once);
 }

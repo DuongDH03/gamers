@@ -658,20 +658,41 @@ Input   ◄── keys, mouse, wheel, text (only while playing; never Esc) ◄ p
   - a `command` names a `GameApi::ui_commands` entry (v3) and becomes a
     `Command` at the next tick (Rule 1); the rest are app actions;
   - native parses everything with fixed limits, ignores other origins,
-    blocks navigation away, and counts anything malformed.
-- **Esc belongs to the page** (playing → pause menu → resume). P and gamepad
-  start are native. One press toggles once, even if the page's message arrives
-  late.
-- **Pacing:** the page asks for a frame after each `requestAnimationFrame`.
-  If none comes for 20 ms (window hidden or minimised), a frame runs anyway,
-  so ticks, network and sound keep going.
+    blocks navigation away (the page's and its iframes'), and counts
+    anything malformed;
+  - notices are short and name no paths ("saved", "load failed: there is no
+    save yet"); the console and the debug HUD keep the full text. The same
+    notice twice in a row is sent with an empty one between, so it shows again.
+- **Esc belongs to the page** (playing → pause menu → resume). Online the
+  same menu opens over a game that runs on (Resume, Settings, Quit). P and
+  gamepad start are native. One press toggles once, even if the page's
+  message arrives late. UI game buttons pressed before a pause, a menu or a
+  load are dropped with the latched keys.
+- **Pacing:** the page asks for a frame after each `requestAnimationFrame`,
+  and only a frame that answers such a request is recorded and sent. If none
+  comes for 20 ms (window hidden or minimised), a frame runs anyway, so
+  ticks, network and sound keep going, but it sends the page nothing. The
+  20 ms is measured by `scraps_web`'s loop: the backend reads no clock
+  (Rule 2) and gets the app's as a function for its start-up waits.
+- **Textures** too big to go in one frame beside its draws (a burst past the
+  64 MB slot) go over the next frames, whole ones in order; the page draws a
+  missing texture flat meanwhile.
 - **Sound and gamepad** come from SDL with no SDL window (`sdl3_devices`), so
   the webview2 backend itself has no SDL dependency.
-- **Building:** the WebView2 SDK is a pinned NuGet package. MSVC uses the
-  static loader; MinGW loads `WebView2Loader.dll` at run time and ships it.
-  CMake runs `npm ci` and `npm run build` in `ui/` when npm is found.
+- **Building:** the WebView2 SDK is a pinned NuGet package (BSD-3-Clause;
+  the release ships its licence as `licenses/WebView2.txt`). MSVC uses the
+  static loader; MinGW loads `WebView2Loader.dll` at run time from the exe's
+  folder only, and ships it. CMake runs `npm ci` and `npm run build` in `ui/`
+  when npm is found, through `cmake/ScrapsNpm.cmake`, which holds a lock on
+  `ui/.npm.lock` so two presets building at once take turns.
   `ctest -L window` runs a real-window self-test that clicks Play, draws
-  120 frames and checks the canvas.
+  120 frames and checks the canvas (its WebView2 profile stays in the build
+  folder), and `package_web_runs` does the same with the installed
+  `scraps_web.exe`. Both report "skipped" without the runtime or without a
+  desktop to draw on (a service, a locked or disconnected session).
+- **Development builds only:** DevTools, F12 and browser keys, the
+  build's `ui/dist` as a fallback, and `--ui-dev <url>` (a dev server on
+  this PC: localhost, 127.0.0.1 or [::1]).
 
 ## 6h. Choosing the game, and shipping it
 
@@ -686,7 +707,8 @@ Input   ◄── keys, mouse, wheel, text (only while playing; never Esc) ◄ p
   `release-msvc`): configure, build, test and package. The zip holds:
   - `scraps_client.exe`, `scraps_web.exe` and `scraps_server.exe`;
   - the compiler runtime DLLs and `WebView2Loader.dll` (MinGW);
-  - `ui/`, `scenes/` and a `README.txt`.
+  - `ui/`, `scenes/`, `licenses/` (SDL3's zlib licence and the WebView2
+    SDK's BSD-3-Clause licence) and a `README.txt`.
   SDL3 is linked statically. Release builds link the game statically and have
   no hot reload. `package_runs` installs it and runs it with `PATH` cut to
   Windows' own folders, and also from a folder with a non-ASCII name.

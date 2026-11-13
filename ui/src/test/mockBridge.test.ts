@@ -95,12 +95,16 @@ describe('mock bridge', () => {
     expect(now().screen).toBe('paused');
   });
 
-  it('online: no pause, no save, no load', () => {
+  it('online: pause opens the menu without pausing; no save, no load', () => {
     const { bridge: b, now } = mock({ online: true });
     b.send(action.simple('play'));
     b.send(action.simple('pause'));
+    expect(now()).toMatchObject({ screen: 'paused', paused: false, online: true });
     b.send(action.simple('save'));
-    expect(now()).toMatchObject({ screen: 'playing', online: true, has_save: false });
+    b.send(action.simple('load'));
+    expect(now()).toMatchObject({ screen: 'paused', online: true, has_save: false, notice: '' });
+    b.send(action.simple('resume'));
+    expect(now()).toMatchObject({ screen: 'playing', paused: false });
   });
 
   it('ignores commands it does not offer', () => {

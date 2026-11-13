@@ -30,7 +30,12 @@ class FrameSink {
 // Textures are uploaded once: create_texture() queues the pixels as a
 // resource that travels with the next frame the page takes. A copy is kept,
 // because a page that reloads (F5 in DevTools, Vite) has lost its textures:
-// resend_textures() queues them all again.
+// resend_textures() queues them all again. Resources that do not all fit in
+// one frame next to its draws go in order over the next frames, as many
+// whole ones per frame as fit; one texture is at most a quarter of a frame
+// and the draws at most what is left after one, so every frame carries at
+// least one and the queue always drains (until then the page draws the
+// missing textures flat, as for a texture that failed to load).
 //
 // draw_debug_text uses SDL's 8x8 debug font (debug_font.h) as a texture of
 // its own, laid out as SDL lays it out, so the text looks the same.
@@ -38,7 +43,11 @@ class FrameSink {
 // Once the buffers have grown to the largest frame, recording allocates nothing.
 class BatchRenderer final : public Renderer2D {
  public:
-  explicit BatchRenderer(FrameSink* sink) : m_sink(sink) {}
+  // `max_frame_bytes`: the largest frame handed to the sink (a slot's
+  // limit); smaller in tests.
+  explicit BatchRenderer(FrameSink* sink, std::size_t max_frame_bytes = kMaxFrameBytes);
+
+  static constexpr std::size_t kMaxFrameBytes = std::size_t{64} * 1024 * 1024;  // kMaxSlotBytes
 
   // The page's canvas size in pixels (CSS size times devicePixelRatio).
   void set_output_size(int width, int height);
@@ -76,12 +85,18 @@ class BatchRenderer final : public Renderer2D {
 
   // Makes room for `vertices` more vertices of a batch of `op` with
   // `texture`: extends the last batch if it matches, else starts one.
-  // False if the frame would grow past what a slot can hold.
+  // False if the draws would grow past their share of a frame.
   bool open_batch(std::uint32_t op, TextureId texture, std::size_t vertices);
+  // How many bytes from the front of m_resources, in whole commands, fit in
+  // `room` bytes.
+  std::size_t resources_fitting(std::size_t room) const;
   void queue_texture(TextureId id);
   TextureId debug_font();
 
   FrameSink* m_sink;
+  std::size_t m_max_frame;     // a whole frame
+  std::size_t m_max_texture;   // one texture's pixels: a quarter of a frame
+  std::size_t m_max_draws;     // the draws: what is left beside the largest texture
   int m_width = 1280;
   int m_height = 720;
   bool m_recording = false;

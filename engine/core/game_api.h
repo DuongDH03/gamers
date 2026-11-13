@@ -91,9 +91,10 @@ constexpr std::size_t kMaxGameBindings = 12;
 // button "drop coin" sends {"type":"action","name":"command","command":
 // "drop_coin"}, and the app queues `command` for the local player at the
 // next tick (Rule 1: the UI never touches the World). `name` is 1 to 31
-// ASCII letters, digits, '_' or '-', unique within the game; it lives in the
-// game's code, so apps copy it. `command` is a game or engine command that a
-// client may send (not kNone, not server-only).
+// ASCII characters, a letter first, then letters, digits or '_', unique
+// within the game; it lives in the game's code, so apps copy it. `command`
+// is a game or engine command that a client may send (not kNone, not
+// server-only).
 struct GameUiCommand {
   const char* name;
   CommandType command;
