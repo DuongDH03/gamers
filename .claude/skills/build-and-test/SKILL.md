@@ -31,15 +31,16 @@ things: MSVC flags narrowing through `std::make_unique` arguments, for example.
 
 ## What the tests cover
 
-`ctest` runs 38 tests (165 unit test functions inside the `unit_*` ones), plus
-`web_window_self_test` with `-L window`. All of them pass with `ctest -j 8`, and
+`ctest` runs 39 tests (171 unit test functions inside the `unit_*` ones), plus
+`web_window_self_test` and `package_web_runs` with `-L window` (they skip, exit 77,
+without a desktop). All of them pass with `ctest -j 8`, and
 with both presets running at once (servers use `--port 0`; smoke tests have their
 own folders):
 
 | Test | Covers |
 |---|---|
-| `layer_rules` | no `#include` points the wrong way across layers (Rule 3); `windows.h`/`dlfcn.h` only in `backends/dynlib` and `backends/webview2` |
-| `layer_rules_catch_mixed_case` | the layer check also catches `<Windows.h>` spelled in any case |
+| `layer_rules` | no `#include` points the wrong way across layers (Rule 3); OS headers (POSIX, Winsock, Win32, COM/shell, WebView2) only in `backends/webview2`, `backends/dynlib` and `backends/udp`, never in apps or tests |
+| `layer_rules_catch_mixed_case` | the layer check catches planted OS and WebView2 headers in any letter case |
 | `boundary_hash_tracks_sources` | the game-module layout hash changes when an engine header, `jobs.cpp` or `world.cpp` changes |
 | `unit_core` | fixed step, bytes, entity handles, simulate, collision, gravity, facing, serialization, delta snapshots, job system, PNG decoding, sound decoding in every format, music streaming and looping, mixing and crossfades, file watching, UTF-8 paths |
 | `unit_scene` | scene parsing (images, textures, sprites too), error messages, bundled scenes |
@@ -58,7 +59,7 @@ own folders):
 | `no_allocation_in_hot_path` | threaded simulate + world copy + delta encode/decode + mixing with music + mouse and pad sampling and picking + polling a game module + pausing + UI polling + webview2 frame encoding + textured draw with shadows allocate nothing after warm-up |
 | `race_demo_atomic_is_exact`, `race_demo_plain_loses_updates` | stage 8's race lesson; the plain one is *expected* to fail, and is skipped on one core |
 | `client_offline_*`, `server_runs`, `bench_runs`, `client_offline_hot_game`, `server_hot_game`, `server_save`/`server_load` (+ `_non_ascii`), `client_offline_save_pause_load`, `tiny_game_runs` | each executable runs end to end: as a DLL, saving and loading, pausing, and a second game |
-| `package_runs` | installs the release files and runs them with `PATH` cut to Windows' own folders, also from a non-ASCII folder |
+| `package_runs` | installs the release files (licences included) and runs them with `PATH` cut to Windows' own folders, also from a non-ASCII folder; `package_web_runs` (label `window`) does the same for `scraps_web --self-test` |
 
 After changing `tools/make_sandbox_sounds.py` or `tools/make_audio_fixtures.py`,
 run them too; both need ffmpeg (`D:/msys64/ucrt64/bin/ffmpeg.exe`, installed
