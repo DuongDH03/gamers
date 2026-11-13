@@ -1,7 +1,8 @@
 // A game module that must be refused (game.mismatch_is_refused): built from
-// this one file twice, once claiming another game API version
-// (SCRAPS_BAD_VERSION) and once another layout hash (SCRAPS_BAD_LAYOUT), as
-// a module built against another engine would.
+// this one file three times, once claiming a newer game API version
+// (SCRAPS_BAD_VERSION), once version 1, the one before gamepad bindings
+// (SCRAPS_BAD_OLD), and once another layout hash (SCRAPS_BAD_LAYOUT), as a
+// module built against another engine would.
 
 #include "core/game_api.h"
 
@@ -12,6 +13,9 @@ void simulate_nothing(scraps::World&, const scraps::CommandList&, scraps::Tick, 
 constexpr scraps::GameApi kApi = {
 #if defined(SCRAPS_BAD_VERSION)
     scraps::kGameApiVersion + 1u,
+    scraps::kGameLayoutHash,
+#elif defined(SCRAPS_BAD_OLD)
+    1u,
     scraps::kGameLayoutHash,
 #else
     scraps::kGameApiVersion,

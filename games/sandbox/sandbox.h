@@ -11,8 +11,8 @@
 // The sandbox game: a small example of how a game sits on top of the engine.
 //   - Walk around in any of the three views.
 //   - Touch a coin (kind 2) to pick it up; your count is shown in the HUD.
-//   - Press E to drop a coin (a game-defined command, sent over the network
-//     like any other).
+//   - Press E (gamepad: west, X on Xbox) to drop a coin (a game-defined
+//     command, sent over the network like any other).
 //   - Left-click a cell near you to place a coin there (the command carries
 //     the clicked world point; the server checks the reach).
 // Everything game-specific lives here; the engine knows nothing about coins.

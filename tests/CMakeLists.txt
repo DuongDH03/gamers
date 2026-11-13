@@ -13,9 +13,10 @@ target_link_libraries(scraps_tests PRIVATE scraps_net scraps_views scraps_headle
 scraps_target_defaults(scraps_tests)
 target_compile_definitions(scraps_tests PRIVATE SCRAPS_TEST_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/audio")
 
-# Two modules that must be refused (game.mismatch_is_refused): one from
-# "another" game API version, one with "another" layout.
-foreach(kind version layout)
+# Three modules that must be refused (game.mismatch_is_refused): one from
+# a newer game API version, one from version 1 (before gamepad bindings),
+# one with "another" layout.
+foreach(kind version old layout)
   string(TOUPPER ${kind} KIND)
   add_library(scraps_test_bad_${kind}_module SHARED bad_game_module.cpp)
   target_link_libraries(scraps_test_bad_${kind}_module PRIVATE scraps_core)

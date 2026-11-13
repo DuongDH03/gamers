@@ -116,11 +116,14 @@ inline bool check_game_api(const scraps::GameApi* api, std::string& error) {
     return false;
   }
   for (std::size_t i = 0; i < api->binding_count; ++i) {
+    // Exactly one of key, mouse button and gamepad button, each in range.
     const scraps::GameBinding& binding = api->bindings[i];
-    const bool is_key = binding.key != scraps::Key::kUnknown;
-    const bool is_button = binding.button != scraps::MouseButton::kCount;
-    if (is_key == is_button || binding.key >= scraps::Key::kCount || binding.button > scraps::MouseButton::kCount ||
-        binding.command == scraps::CommandType::kNone || scraps::is_server_only(binding.command)) {
+    const int sources = (binding.key != scraps::Key::kUnknown ? 1 : 0) +
+                        (binding.button != scraps::MouseButton::kCount ? 1 : 0) +
+                        (binding.pad != scraps::GamepadButton::kCount ? 1 : 0);
+    if (sources != 1 || binding.key >= scraps::Key::kCount || binding.button > scraps::MouseButton::kCount ||
+        binding.pad > scraps::GamepadButton::kCount || binding.command == scraps::CommandType::kNone ||
+        scraps::is_server_only(binding.command)) {
       error = "input binding " + std::to_string(i) + " of the game is not valid";
       return false;
     }
@@ -217,6 +220,8 @@ class GameModule {
         const scraps::GameBinding& binding = m_bindings[i];
         if (binding.key != scraps::Key::kUnknown) {
           targets.controls->bind(binding.key, binding.command);
+        } else if (binding.pad != scraps::GamepadButton::kCount) {
+          targets.controls->bind(binding.pad, binding.command);
         } else {
           targets.controls->bind(binding.button, binding.command);
         }
@@ -334,7 +339,7 @@ class GameModule {
     for (std::size_t i = 0; i < m_binding_count; ++i) {
       const scraps::GameBinding& a = api.bindings[i];
       const scraps::GameBinding& b = m_bindings[i];
-      if (a.key != b.key || a.button != b.button || a.command != b.command) return false;
+      if (a.key != b.key || a.button != b.button || a.pad != b.pad || a.command != b.command) return false;
     }
     return true;
   }

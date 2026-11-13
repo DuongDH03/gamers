@@ -24,6 +24,7 @@ void simulate_marked(scraps::World& world, const scraps::CommandList& commands, 
 constexpr scraps::GameBinding kBindings[] = {
     scraps::key_binding(scraps::Key::kE, sandbox::kDropCoin),
     scraps::button_binding(scraps::MouseButton::kLeft, sandbox::kPlaceCoin),
+    scraps::pad_binding(scraps::GamepadButton::kWest, sandbox::kDropCoin),
 };
 
 constexpr scraps::GameApi kApi = {

@@ -15,6 +15,7 @@ namespace {
 constexpr scraps::GameBinding kBindings[] = {
     scraps::key_binding(scraps::Key::kE, kDropCoin),
     scraps::button_binding(scraps::MouseButton::kLeft, kPlaceCoin),
+    scraps::pad_binding(scraps::GamepadButton::kWest, kDropCoin),
 };
 
 // The function pointers below point into whichever build this is; in the
