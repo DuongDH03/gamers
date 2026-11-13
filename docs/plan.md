@@ -47,24 +47,22 @@ Each item: spec in `docs/specs/`, owner approves, implement, review, bench.
    describe themselves with `GameApi`; with `--hot-game` the client (offline)
    and the server load the game as a DLL and swap in each new build of
    `cmake --build --preset mingw-game` without restarting.
-5. **Rust, as a learning track** after the above: `docs/rust-plan.md`.
+5. ~~Save and load, music, gamepad, pause, packaging, the React UI~~ **done**
+   2026-11-14 (spec `docs/specs/2026-11-14-offline-essentials-and-ui.md`,
+   results and review fixes at its end; decision
+   `docs/decisions/2026-11-14-ui-layout.md`). Built by four parallel agents
+   (wave 1), then three for the UI (wave 2). Quick save/load (F5/F9) and server
+   `--load`/`--save`; streamed music with crossfades; first-gamepad support;
+   offline pause (P / start); `-DSCRAPS_GAME`, release workflows and a zip that
+   runs on a clean PC; `scraps_web.exe`, React menus and HUD in a WebView2
+   window over WebGL2. Not checked by hand yet: a real gamepad, listening to
+   the music, high-DPI and multi-monitor windows.
+6. **Rust, as a learning track** after the above: `docs/rust-plan.md`.
 
 ## Still open (owner decides)
 
-- **UI technology.** The owner wants UI written in React/HTML/JS while still
-  shipping a native exe (like Tauri or Electron; not a browser build). Two
-  layouts, no choice yet:
-  - **A. A WebView draws everything.** The C++ engine runs natively (simulate,
-    server, UDP, scenes) inside a WebView2 window. The world is drawn with
-    WebGL from per-frame data sent through shared memory (JSON IPC is too
-    slow at 60 fps). React draws menus and the HUD.
-  - **B. The engine draws the world; HTML is an overlay.** Native GPU
-    rendering of the world; React rendered offscreen (Ultralight or CEF)
-    and composited on top, with mouse input routed to UI or game.
-  Either is a new backend (Rule 3), and UI actions become `Command`s (Rule 1).
-  Both need text input (and an input event list) in `Input` and the client
-  loop as a one-frame function first. Sprites, textures and the mouse now
-  exist.
+- ~~UI technology~~ **decided** 2026-11-14: layout A, React in a WebView2
+  window over WebGL2 (`docs/decisions/2026-11-14-ui-layout.md`), built.
 - **Rust** in the project at all: learning only, a Tauri UI shell, tools, or
   a port. Decided after parts 1 to 3 of `docs/rust-plan.md`.
 - Scripting: none, Lua, or C++ only. (Today: C++ only, by default, not by

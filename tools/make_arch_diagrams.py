@@ -14,19 +14,19 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path
 
 
 # ---------------------------------------------------------------- 1. layers
-s = Svg(500, 'Scraps layers', 'Apps on top, then games, then views and net side by side, then core, then platform interfaces; backends sdl3, headless and udp implement the interfaces; dynlib loads game modules for the apps. Includes only point down.')
-rows = [(30, 'teal', 'apps', 'scraps_client · scraps_server · scraps_bench: the only place a backend is named'),
+s = Svg(500, 'Scraps layers', 'Apps on top, then games, then views and net side by side, then core, then platform interfaces; backends sdl3, headless, udp and webview2 implement the interfaces; dynlib loads game modules for the apps. Includes only point down.')
+rows = [(30, 'teal', 'apps', 'scraps_client · scraps_web · scraps_server · scraps_bench: the only place a backend is named'),
         (100, 'teal', 'games', 'sandbox: coin rules; exports a GameApi (static, or a DLL with --hot-game)')]
 for y, ramp, title, sub in rows:
     s.box(40, y, 600, 56, ramp, title, sub)
 s.box(40, 170, 290, 56, 'purple', 'engine/views', 'TopDown · Side · Isometric · Controls')
 s.box(350, 170, 290, 56, 'purple', 'engine/net', 'protocol · Server · Client · Loopback')
 s.box(40, 240, 600, 56, 'purple', 'engine/core', 'World · Entity · Command · simulate · movement · Level · scenes · serialize · jobs · sound · mixer')
-s.box(40, 310, 600, 56, 'gray', 'engine/platform (interfaces only)', 'Window · Input · Renderer2D · Audio · Net')
-for i, (title, sub) in enumerate([('sdl3', 'window, GPU, input'), ('headless', 'server and tests'), ('udp', 'real sockets'), ('dynlib', 'game DLLs, apps only')]):
-    s.box(40 + i * 155, 400, 135, 56, 'amber', title, sub)
-    if i < 3:
-        s.arrow([(107 + i * 155, 398), (107 + i * 155, 370)], 'amber', dashed=True)
+s.box(40, 310, 600, 56, 'gray', 'engine/platform (interfaces only)', 'Window · Input · Renderer2D · Audio · Net · UiHost')
+for i, (title, sub) in enumerate([('sdl3', 'window, GPU, pad'), ('webview2', 'React UI, WebGL'), ('headless', 'server, tests'), ('udp', 'real sockets'), ('dynlib', 'game DLLs')]):
+    s.box(40 + i * 122, 400, 112, 56, 'amber', title, sub)
+    if i < 4:
+        s.arrow([(96 + i * 122, 398), (96 + i * 122, 370)], 'amber', dashed=True)
 s.arrow([(340, 87), (340, 98)])
 s.arrow([(185, 157), (185, 168)])
 s.arrow([(495, 157), (495, 168)])
@@ -315,5 +315,27 @@ s.text(218, 276, 'full state (before)')
 s.add('<g class="blue"><rect class="ff" x="360" y="270" width="12" height="12" rx="2"/></g>')
 s.text(378, 276, 'delta (now)')
 s.save(OUT, 'arch-snapshot-sizes.svg')
+
+# ---------------------------------------------------------------- 6f. the UI layer in scraps_web
+s = Svg(420, 'scraps_web: the UI layer', 'Native side: ClientApp runs the game; the webview2 backend turns Renderer2D calls into one frame of bytes in a shared buffer, sends small JSON view messages through UiHost, and receives UI actions and page input. Page side: renderer.js draws the frame with WebGL2 on the world canvas, React draws menus and HUD on top and sends actions; Esc belongs to the page.')
+s.frame(40, 30, 290, 300)
+s.text(185, 50, 'Native (scraps_web.exe)', 'th', 'middle')
+s.box(58, 66, 254, 48, 'purple', 'ClientApp::frame', 'simulate, net, audio, Views')
+s.box(58, 136, 254, 48, 'amber', 'Renderer2D (webview2)', 'batches + textures as bytes')
+s.box(58, 206, 254, 48, 'amber', 'UiHost and Input', 'view out; actions, input in')
+s.box(58, 266, 254, 48, 'gray', 'UiModel', 'action: Command or app call')
+s.arrow([(185, 115), (185, 134)])
+s.frame(350, 30, 290, 300)
+s.text(495, 50, 'Page (WebView2)', 'th', 'middle')
+s.box(368, 66, 254, 48, 'coral', 'React UI (ui/)', 'menus, HUD, Esc')
+s.box(368, 136, 254, 48, 'coral', 'renderer.js: WebGL2', 'draws on canvas#world')
+s.box(368, 206, 254, 48, 'coral', 'Page input', 'keys, mouse while playing')
+s.arrow([(313, 160), (366, 160)], 'amber')
+s.arrow([(366, 90), (340, 90), (340, 230), (314, 230)], 'coral', both=True)
+s.arrow([(366, 240), (346, 240), (346, 250), (314, 250)], 'coral')
+s.text(40, 352, 'Frame bytes go through a shared buffer (a 20-byte note per frame, no JSON per vertex).', 'ts')
+s.text(40, 372, 'Views are sent only on change; actions and input have fixed limits.', 'ts')
+legend(s, 400, [('purple', 'engine'), ('amber', 'webview2 backend'), ('coral', 'page'), ('gray', 'app')])
+s.save(OUT, 'arch-webview2.svg')
 
 print('ok')

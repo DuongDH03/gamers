@@ -233,7 +233,7 @@ native engine: simulate, server, net, audio, Views            │ or CEF (open, 
 |---|---|---|
 | How | New backend `webview2`: a Win32 window with a WebView2 control implements Window, Input and Renderer2D. `fill_triangles` batches and textures go to WebGL2 through a `CoreWebView2SharedBuffer`; React is in the same page. Audio stays native (SDL audio only). | Keep `sdl3`. Render React offscreen with Ultralight or CEF into a bitmap; `Renderer2D` gains `update_texture`; draw it over the world; route input to the UI first, the game second. |
 | Reuse | All three Views unchanged: they already reduce everything to triangle batches and textures, which is all `Renderer2D` is. | Everything unchanged; the UI is added on top. |
-| Dependencies | WebView2 runtime is part of Windows 11 (installed here, version 157); WebView2 SDK (MIT, NuGet). Node for building the React app (installed: Node 20). | Ultralight: closed source, free under a revenue limit, about 40 MB. CEF: open, about 150 MB, several processes. Plus Node. |
+| Dependencies | WebView2 runtime is part of Windows 11 (installed here, version 157); WebView2 SDK (BSD-3-Clause, NuGet). Node for building the React app (installed: Node 20). | Ultralight: closed source, free under a revenue limit, about 40 MB. CEF: open, about 150 MB, several processes. Plus Node. |
 | Developer experience | Edge DevTools (F12) on the real game UI; Vite hot reload of React while the game runs. | DevTools only through a remote inspector; harder. |
 | Costs | Windows only for the React build (the `sdl3` build stays as it is, without React UI). About one more frame of display latency through the browser compositor. | A big binary dependency; the UI bitmap is copied to the GPU every frame it changes; more glue code for input routing. |
 | Rules | A new backend (Rule 3); UI actions are Commands (Rule 1). | The same. |
@@ -1247,7 +1247,7 @@ tests: `unit_webview2`, `webview2_renderer_js`, `ui_tests`,
   on `scraps_web.exe`.
 
 **The WebView2 SDK**: `Microsoft.Web.WebView2` **1.0.4314.35** from
-nuget.org (MIT), `URL_HASH SHA256=90778DEB1B77E36292828B4B5833C9255C27533F40E0DDD55891AE718944EDC4`,
+nuget.org (BSD-3-Clause), `URL_HASH SHA256=90778DEB1B77E36292828B4B5833C9255C27533F40E0DDD55891AE718944EDC4`,
 with the headers included as SYSTEM headers.
 
 - **MSVC** links `WebView2LoaderStatic.lib`, so nothing extra ships.

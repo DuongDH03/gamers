@@ -23,7 +23,7 @@ discussed before code, and says when to implement.
 - Details: `docs/plan.md` (status), `docs/architecture.md` (how it fits),
   `docs/scene-format.md` (level files), `docs/rust-plan.md` (future Rust track).
 
-## Where it stands (2026-11-12)
+## Where it stands (2026-11-14)
 
 | Stage | Status |
 |---|---|
@@ -32,6 +32,7 @@ discussed before code, and says when to implement.
 | 7 Assets and scenes | Done: `.scene` files, PNG textures, animated sprite sheets, hot reload, per-scene sky, sound effects in any common format |
 | 8 Job system | Done: `JobSystem::parallel_for`, threaded movement, `scraps_race_demo` |
 | Mouse input · hot-reloadable game code | Done: pointer, buttons, wheel, click → Command; `GameApi`, `--hot-game`, `*-game` build presets |
+| Offline essentials · React UI | Done 2026-11-14: save/load (F5/F9), streamed music, gamepad, pause (P/start), `-DSCRAPS_GAME`, release zip (`cmake --workflow --preset release-mingw`), `scraps_web.exe` (React in WebView2 over WebGL2) |
 | 9 Netcode | Mostly done: UDP server, prediction + reconciliation, remote-player interpolation, offline over loopback, lossless delta snapshots, challenge-cookie handshake + rate limits (protocol v4). Not yet: relevance (part B), lag compensation |
 
 Decided: name Scraps; array-of-structs entities; one 3D tile grid with 2:1
@@ -41,13 +42,13 @@ loopback; PNG via stb_image with sprite sheets; `simulate` takes an optional
 audio: every common format (WAV, AIFF, FLAC, MP3, OGG Vorbis) recognised by
 content, mixed by the engine (`docs/decisions/2026-11-12-audio-formats.md`);
 games describe themselves with `GameApi` and can be hot-reloaded as a DLL
-(`docs/decisions/2026-11-12-game-modules.md`).
+(`docs/decisions/2026-11-12-game-modules.md`); UI is layout A, React in a
+WebView2 window (`docs/decisions/2026-11-14-ui-layout.md`, `ui/`).
 Art comes from `tools/make_sandbox_art.py`, sounds from
 `tools/make_sandbox_sounds.py`; audio test files from
 `tools/make_audio_fixtures.py` (both need ffmpeg, installed via MSYS2).
 Docs diagrams: SVGs from `tools/make_*_diagrams.py`, each with an ASCII
-"Text version" under it for agents. Not a git repo yet (the owner
-declined to init for now).
+"Text version" under it for agents. Git repo, pushed to `github.com/DuongDH03/gamers` (`main`).
 
 ## Next steps, in order
 
@@ -64,23 +65,15 @@ declined to init for now).
    (`docs/specs/2026-11-12-mouse-and-hot-reload.md`, results at its end).
    Run `scraps_client --hot-game`, edit `games/sandbox/*.cpp`, then
    `cmake --build --preset mingw-game`: the running game swaps in the new code.
-4. **Rust as a learning track**: `docs/rust-plan.md` (written for someone with
+4. ~~Save/load, music, gamepad, pause, packaging, React UI~~: **done**
+   2026-11-14 (`docs/specs/2026-11-14-offline-essentials-and-ui.md`).
+   Still to try by hand: a real gamepad, the music, `scraps_web` on high-DPI.
+5. **Rust as a learning track**: `docs/rust-plan.md` (written for someone with
    no Rust experience; starts after stage 8, which is now done).
 
 ## Open decisions (owner decides; don't pick them by writing code)
 
-- **UI technology.** The owner wants to write UI in React/HTML/JS while still
-  shipping a native exe (Tauri/Electron style, not a browser build). Two
-  layouts discussed, no choice made yet:
-  - **A. WebView draws everything**: native C++ engine + a WebView2 window;
-    the world drawn with WebGL from per-frame data (needs shared memory, not
-    JSON IPC); React for menus/HUD.
-  - **B. Engine draws the world, HTML is an overlay**: native GPU rendering,
-    React rendered offscreen (Ultralight or CEF) and composited on top.
-  Either is a new backend (Rule 3); UI actions become `Command`s (Rule 1).
-  Both need engine work first: text input (an input event list) in `Input`
-  and the client loop as a one-frame function (sprites, textures and the
-  mouse now exist).
+- ~~UI technology~~: decided 2026-11-14, layout A (React in WebView2), built.
 - Rust in the project: learning only, a UI shell, tools, or a port
   (`docs/rust-plan.md`, part 5).
 - Scripting: none, Lua, or C++ only. (Today: C++ only, reloadable while the

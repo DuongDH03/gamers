@@ -13,10 +13,17 @@ description: How to configure, build, test, run and benchmark the Scraps engine 
 | Build | `cmake --build --preset mingw` | `cmake --build --preset msvc` | `cmake --build --preset headless` |
 | Test | `ctest --preset mingw` | `ctest --preset msvc` | `ctest --preset headless` |
 | Rebuild only the game module (hot reload) | `cmake --build --preset mingw-game` | `cmake --build --preset msvc-game` | |
+| Release zip (configure, build, test, package) | `cmake --workflow --preset release-mingw` | `cmake --workflow --preset release-msvc` | |
+| Real-window test (needs a desktop) | `ctest --preset mingw -L window` | `ctest --preset msvc -L window` | |
 
 The first configure downloads and builds SDL3 (pinned tag and SHA-256 in
 `cmake/ScrapsSDL3.cmake`); it takes a few minutes. Executables land in
 `build/<preset>/apps/` (MSVC: `build/msvc/apps/Release/`).
+
+CMake 3.25 or newer is needed (presets v6, workflows). The release presets build
+in `build/release-<compiler>/` with hot reload off; the zip is in its `package/`.
+Workflow presets take no `-D`: to reuse an SDL3 download, configure the preset once
+with `-DFETCHCONTENT_SOURCE_DIR_SDL3=<path>/build/mingw/_deps/sdl3-src` first.
 
 A change is done only when **both** `mingw` and `msvc` build with zero warnings
 (warnings are errors) and `ctest` passes on both. GCC and MSVC catch different
@@ -24,25 +31,34 @@ things: MSVC flags narrowing through `std::make_unique` arguments, for example.
 
 ## What the tests cover
 
-`ctest` runs 23 tests (98 unit test functions inside the `unit_*` ones):
+`ctest` runs 38 tests (165 unit test functions inside the `unit_*` ones), plus
+`web_window_self_test` with `-L window`. All of them pass with `ctest -j 8`, and
+with both presets running at once (servers use `--port 0`; smoke tests have their
+own folders):
 
 | Test | Covers |
 |---|---|
-| `layer_rules` | no `#include` points the wrong way across layers (Rule 3); `windows.h`/`dlfcn.h` only in `backends/dynlib` |
+| `layer_rules` | no `#include` points the wrong way across layers (Rule 3); `windows.h`/`dlfcn.h` only in `backends/dynlib` and `backends/webview2` |
 | `layer_rules_catch_mixed_case` | the layer check also catches `<Windows.h>` spelled in any case |
 | `boundary_hash_tracks_sources` | the game-module layout hash changes when an engine header, `jobs.cpp` or `world.cpp` changes |
-| `unit_core` | fixed step, bytes, entity handles, simulate, collision, gravity, facing, serialization, delta snapshots, job system, PNG decoding, sound decoding in every format, mixing, file watching |
+| `unit_core` | fixed step, bytes, entity handles, simulate, collision, gravity, facing, serialization, delta snapshots, job system, PNG decoding, sound decoding in every format, music streaming and looping, mixing and crossfades, file watching, UTF-8 paths |
 | `unit_scene` | scene parsing (images, textures, sprites too), error messages, bundled scenes |
 | `unit_views` | projections, `screen_to_world` (the inverse), input mapping, isometric draw order, textures and batching, sprite animation |
-| `unit_platform` | headless pointer, buttons and wheel latch per frame |
-| `unit_controls` | keys and clicks latched per frame, emitted once per tick (a click carries its world point) |
+| `unit_platform` | headless pointer, buttons, wheel and gamepad latch per frame; the input event list and text input |
+| `unit_controls` | keys, clicks and pad buttons latched per frame, emitted once per tick (a click carries its world point); stick dead zone and direction in every view |
+| `unit_save`, `unit_pause` | save format (round trip, damage, versions, other scene/game), offline save/load, forward and backward loads; pause with no ticks, no timeouts, no burst |
+| `unit_apps` | scene folder lookup, release builds saying where they looked, drive roots |
+| `unit_ui` | UI JSON reader/writer (hostile input, fuzz), every action on every screen, view sent only on change, volume x duck, ClientApp with a headless UI, input in menus never acting |
+| `unit_webview2`, `webview2_renderer_js` | frame byte format (C++ encoder, JS decoder), page input parsing, Esc never forwarded |
+| `ui_tests` | the React app's Vitest suite (bridge validation, screens, actions, Esc) |
 | `unit_game` | game modules: the DLL matches the static game, swaps keep the world and run the new code, mismatches are refused, shared heap, stable-file wait, live-copy and non-ASCII paths |
 | `unit_net` | server/client over an in-memory network with latency, loss and reordering; delta snapshots, the challenge-cookie handshake, rate limits and floods, interpolation, hot reload |
 | `unit_sandbox` | the example game's rules (coins, placing a coin with the mouse) |
 | `unit_udp` | a real client and server over UDP on 127.0.0.1 |
-| `no_allocation_in_hot_path` | threaded simulate + world copy + delta encode/decode + mixing + mouse sampling and picking + polling a game module + textured draw with shadows allocate nothing after warm-up |
+| `no_allocation_in_hot_path` | threaded simulate + world copy + delta encode/decode + mixing with music + mouse and pad sampling and picking + polling a game module + pausing + UI polling + webview2 frame encoding + textured draw with shadows allocate nothing after warm-up |
 | `race_demo_atomic_is_exact`, `race_demo_plain_loses_updates` | stage 8's race lesson; the plain one is *expected* to fail, and is skipped on one core |
-| `client_offline_*`, `server_runs`, `bench_runs`, `client_offline_hot_game`, `server_hot_game` | each executable runs end to end, also with the game loaded as a DLL |
+| `client_offline_*`, `server_runs`, `bench_runs`, `client_offline_hot_game`, `server_hot_game`, `server_save`/`server_load` (+ `_non_ascii`), `client_offline_save_pause_load`, `tiny_game_runs` | each executable runs end to end: as a DLL, saving and loading, pausing, and a second game |
+| `package_runs` | installs the release files and runs them with `PATH` cut to Windows' own folders, also from a non-ASCII folder |
 
 After changing `tools/make_sandbox_sounds.py` or `tools/make_audio_fixtures.py`,
 run them too; both need ffmpeg (`D:/msys64/ucrt64/bin/ffmpeg.exe`, installed
@@ -80,6 +96,19 @@ build/mingw/apps/scraps_client.exe --scene isometric
   Don't build the full preset while the exe runs: Windows locks the running exe.
   Editing an `engine/core` or `engine/platform` header, `core/jobs.cpp` or
   `core/world.cpp` makes the module refuse to load until you restart.
+
+## The React UI and scraps_web
+
+- `ui/` is a Vite + React + TypeScript app. CMake runs `npm ci` and
+  `npm run build` when npm is found (option `SCRAPS_BUILD_UI`). By hand, in `ui/`:
+  `npm run dev` (in a browser, with a mock game), `npm test`,
+  `npm run typecheck` and `npm run build`.
+- `scraps_web.exe` is the client in a WebView2 window with that UI. It starts on
+  the main menu. `--ui-dev http://localhost:5173/` loads the Vite dev server for
+  hot reload of React, `--debug-hud` shows the old text HUD, and
+  `--screenshot <file>` saves the canvas. F12 opens DevTools in development builds.
+- The WebView2 runtime ships with Windows 11; the SDK is a pinned NuGet package
+  (`cmake/ScrapsWebView2.cmake`).
 
 ## Benchmark
 

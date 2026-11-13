@@ -11,13 +11,13 @@ terminals; when a diagram changes, update both.
 
 ## 1. Layers (Rules 3 and 4)
 
-![Layers: apps, games, views and net side by side, core, platform interfaces; backends sdl3, headless and udp implement the interfaces](images/arch-layers.svg)
+![Layers: apps, games, views and net side by side, core, platform interfaces; backends sdl3, webview2, headless and udp implement the interfaces; dynlib loads game DLLs](images/arch-layers.svg)
 
 <details><summary>Text version</summary>
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ apps/        scraps_client  scraps_server  scraps_bench              │  the only place a
+│ apps/        scraps_client  scraps_web  scraps_server  scraps_bench  │  the only place a
 │              (wires everything; names concrete backends)             │  backend is named
 ├──────────────────────────────────────────────────────────────────────┤
 │ games/       sandbox: coin rules; exports a GameApi                  │
@@ -29,11 +29,11 @@ terminals; when a diagram changes, update both.
 ├───────────────────────────────┴──────────────────────────────────────┤
 │ engine/core   World  Entity  Command  simulate  movement  Level      │
 │               Scene loader  serialization  FixedStepClock  jobs      │
-│               sound (decoding)  mixer                                │
+│               sound (decoding)  music (streaming)  mixer  save       │
 ├──────────────────────────────────────────────────────────────────────┤
-│ engine/platform   Window  Input  Renderer2D  Audio  Net  (interfaces)│
+│ engine/platform   Window Input Renderer2D Audio Net UiHost (interf.) │
 └──────────────────────────────────────────────────────────────────────┘
-        ▲ implemented by engine/backends:  sdl3   headless   udp
+        ▲ implemented by engine/backends:  sdl3   webview2   headless   udp
           (engine/backends/dynlib loads game DLLs; only apps use it)
 ```
 
@@ -524,7 +524,7 @@ each new build while it runs.
 <details><summary>Text version</summary>
 
 ```text
-cmake --build --preset mingw-game        (builds only scraps_sandbox_module)
+cmake --build --preset mingw-game        (builds only the selected game's module)
         │
 FileWatcher sees the .dll change, waits until it is stable (linker finished)
         │
@@ -555,6 +555,141 @@ unload the previous copy
 - **The loop:** start `scraps_client --hot-game`, edit `games/sandbox/*.cpp`,
   run `cmake --build --preset mingw-game` (about a second), and the running
   game picks it up.
+
+## 6e. Saving, loading and pausing
+
+([spec](specs/2026-11-14-offline-essentials-and-ui.md), Parts 1 and 4)
+
+- **A save is the World's state**, written the same way as a snapshot
+  (`write_world_state`). Its header holds:
+  - magic `SCRS` and the save format version;
+  - the world format version;
+  - the scene name and content hash;
+  - the tick and the game's name;
+  - a checksum.
+  The level is not stored; it comes from the scene file. Loading starts from
+  the World built from the scene and lays the saved state over it
+  (`core/save.h`). A truncated, damaged or other-version file, another game's
+  save, or another scene's is refused; a changed scene file loads with a
+  warning.
+- **The server saves and loads** (Rule 5). Offline that is the embedded
+  server. `Server::load_state` replaces the World between ticks, like a
+  scene reload (construction, not mutation). It starts a new **world epoch**,
+  sent in every snapshot (protocol v5), so clients reset prediction and
+  interpolation whether the loaded tick is earlier or later.
+- **Where:** offline, F5 and F9 use `quick.sav` in `SDL_GetPrefPath("Scraps",
+  <game>)` (`%APPDATA%\Scraps\<game>\`), or `saves/` when headless. The
+  dedicated server has `--load` and `--save`; `--save` runs on a clean stop
+  only.
+- **Pause** is offline only. P, gamepad start or the pause menu stop the
+  embedded server and the client together: no ticks, no inputs and no
+  snapshots, with timeouts frozen on both sides. Frames keep drawing, and the
+  music ducks to 40%. On resume the step clock is reset, so no burst of
+  catch-up ticks runs (Rule 2). Input pressed while paused or in a menu is
+  thrown away.
+
+![Pause stops ticks on the embedded server and the client together, freezes timeouts, resets the step clock on resume so there's no catch-up burst; rendering and audio continue](images/spec-ou-pause.svg)
+
+<details><summary>Text version</summary>
+
+```text
+P / gamepad start / pause menu ─► paused
+paused:   server: no ticks, no snapshots, timeouts frozen
+          client: no prediction, no inputs, server timeout frozen
+          frames keep drawing the last world; music at 40 %
+resume:   both unpause, clock.reset()  ─► the next tick follows (no burst)
+```
+
+</details>
+
+## 6f. Music, gamepad and the input event list
+
+- **Music** streams: `MusicStream` (`core/music.h`) keeps the encoded file in
+  memory (up to 64 MB) and decodes a few thousand frames at a time with the
+  same vendored decoders as sound effects. A scene line `music <path>
+  [volume V]` plays it, crossfading when the track changes and continuing
+  across a hot reload. The mixer has a music channel with its own volume.
+  Mixing allocates nothing. A pre-check of every OGG comment header keeps a
+  damaged file from crashing stb_vorbis.
+- **The gamepad** comes through `Input`: the first connected pad, with
+  positional button names (south = A on Xbox), raw axes, and buttons latched
+  per frame like keys. `Controls` maps the left stick through the View, as it
+  does WASD (Rule 4), with a radial dead zone of 0.2. `GameBinding` can name a
+  pad button (`GameApi` v2).
+- **The event list:** `Input::events()` is every key, text, pointer and pad
+  event of the frame in order, with fixed capacity (256), for UI text fields.
+  The polling API is unchanged.
+
+## 6g. The UI layer: React in a WebView2 window
+
+([decision](decisions/2026-11-14-ui-layout.md), [spec](specs/2026-11-14-offline-essentials-and-ui.md), Part 6)
+
+`scraps_web.exe` is the client with a React UI. A Win32 window hosts WebView2.
+The world is drawn by WebGL2 in the page, from the same triangle batches the
+Views already make, and React draws the menus and HUD on top. `scraps_client`
+(SDL) is unchanged and still has the debug HUD.
+
+![Native side: ClientApp runs the game; the webview2 backend turns Renderer2D calls into frame bytes in a shared buffer and exchanges small JSON messages through UiHost. Page side: renderer.js draws with WebGL2 on the world canvas, React draws menus and HUD and sends actions](images/arch-webview2.svg)
+
+<details><summary>Text version</summary>
+
+```text
+native (scraps_web.exe)                                page (WebView2, https://scraps.ui/)
+ClientApp::frame  (simulate, net, audio, Views)
+  ▼
+Renderer2D (webview2): textures + batches as bytes ─shared buffer─► renderer.js: WebGL2 on canvas#world
+UiHost: view JSON (only when it changes) ───────────────────────────► React (ui/): menus, HUD, Esc
+UiModel ◄── actions {name: play|pause|save|...|command} ◄────────────┘
+Input   ◄── keys, mouse, wheel, text (only while playing; never Esc) ◄ page input
+```
+
+</details>
+
+- **One frame** is one byte stream, with textures (sent once) and then
+  batches in painter's order. It goes through an `ICoreWebView2SharedBuffer`
+  with a 20-byte note per frame; there is no JSON per vertex. The page draws
+  top row first into an offscreen texture, so the result matches the SDL
+  client pixel for pixel (top-down 100%, side and isometric over 99.9%; the
+  rest is a coin's animation frame).
+- **Messages** use the protocol in spec section 6a:
+  - views go to the page when they change;
+  - actions come back: `play`, `continue`, `pause`, `resume`, `save`, `load`,
+    `quit`, volumes, settings, and `command`;
+  - a `command` names a `GameApi::ui_commands` entry (v3) and becomes a
+    `Command` at the next tick (Rule 1); the rest are app actions;
+  - native parses everything with fixed limits, ignores other origins,
+    blocks navigation away, and counts anything malformed.
+- **Esc belongs to the page** (playing → pause menu → resume). P and gamepad
+  start are native. One press toggles once, even if the page's message arrives
+  late.
+- **Pacing:** the page asks for a frame after each `requestAnimationFrame`.
+  If none comes for 20 ms (window hidden or minimised), a frame runs anyway,
+  so ticks, network and sound keep going.
+- **Sound and gamepad** come from SDL with no SDL window (`sdl3_devices`), so
+  the webview2 backend itself has no SDL dependency.
+- **Building:** the WebView2 SDK is a pinned NuGet package. MSVC uses the
+  static loader; MinGW loads `WebView2Loader.dll` at run time and ships it.
+  CMake runs `npm ci` and `npm run build` in `ui/` when npm is found.
+  `ctest -L window` runs a real-window self-test that clicks Play, draws
+  120 frames and checks the canvas.
+
+## 6h. Choosing the game, and shipping it
+
+- **One option picks the game:** `-DSCRAPS_GAME=<name>` (default
+  `sandbox`). Each game calls `scraps_add_game(<name> SOURCES ... SCENES
+  <dir>)` (`cmake/ScrapsGame.cmake`), which makes its static library, its
+  hot-reload module and its scene settings. The apps get the chosen game's
+  `GameApi` from a generated header and never name a game.
+- **Scenes at run time:** `--scene-dir`, then `scenes/` next to the exe, then
+  (development builds only) the source folder.
+- **A release** is `cmake --workflow --preset release-mingw` (or
+  `release-msvc`): configure, build, test and package. The zip holds:
+  - `scraps_client.exe`, `scraps_web.exe` and `scraps_server.exe`;
+  - the compiler runtime DLLs and `WebView2Loader.dll` (MinGW);
+  - `ui/`, `scenes/` and a `README.txt`.
+  SDL3 is linked statically. Release builds link the game statically and have
+  no hot reload. `package_runs` installs it and runs it with `PATH` cut to
+  Windows' own folders, and also from a folder with a non-ASCII name.
 
 ## 7. Where time and memory go
 

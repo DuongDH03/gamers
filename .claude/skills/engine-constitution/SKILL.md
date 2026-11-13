@@ -103,8 +103,9 @@ views/   net/    views: TopDownView, SideView, IsometricView, Controls
 core/            loop, World, simulate, commands, entities, scenes, serialization
 platform/        interfaces: Window, Input, Renderer2D, Audio, Net
 backends/        sdl3/, headless/, udp/   (implement platform interfaces)
+                 webview2/                (WebView2 window: Window, Input, Renderer2D, UiHost)
                  dynlib/                  (loads game modules; used by apps only)
-apps/            client/, server/, bench/  (thin executables that wire the layers together)
+apps/            client/, web/, server/, bench/  (thin executables that wire the layers together)
 ```
 
 Dependencies point downward only. `core` includes `platform` interfaces, never `backends`. `views`
@@ -117,9 +118,9 @@ enforces this on every `ctest` run.
 ```
 engine/
   core/  platform/  views/  net/
-  backends/  sdl3/  headless/  udp/  dynlib/
+  backends/  sdl3/  headless/  udp/  dynlib/  webview2/
 apps/
-  client/  server/  bench/
+  client/  web/  server/  bench/
 games/
   <one folder per game>   (sandbox/ is the example game)
 tests/
@@ -187,14 +188,11 @@ Decided (each has a dated file in `docs/decisions/`):
 - Games describe themselves to the apps with a plain **`GameApi`** struct and can be loaded as a
   **hot-reloadable DLL** (`--hot-game`); release builds link them statically
   (`2026-11-12-game-modules.md`).
+- UI: **layout A**, React/HTML in a WebView2 window that also draws the world with WebGL2 from the
+  Views' triangle batches (`2026-11-14-ui-layout.md`). UI game actions are `Command`s.
 
 Still open. Nobody picks these implicitly by writing code:
 
-- UI technology: React/HTML/JS in a native exe (Tauri/Electron style), either
-  (A) a WebView draws everything, the world through WebGL, or (B) the engine
-  draws the world and an offscreen HTML UI is composited on top. Details in
-  `docs/plan.md`. Whichever is chosen is a new backend (Rule 3), and UI
-  actions are `Command`s (Rule 1).
 - Rust in the project: learning only, a UI shell, tools, or a port (`docs/rust-plan.md`, part 5).
 - Scripting: none, Lua, or C++ only.
 - The tool used to author levels.
@@ -215,3 +213,5 @@ Later on 2026-11-12, section 7 recorded the audio decision (every common format)
 from the open list. Rules 1 to 5 are unchanged.
 Later on 2026-11-12, sections 3, 4 and 7 recorded the `dynlib` backend and the game-module
 decision (owner-approved spec `2026-11-12-mouse-and-hot-reload.md`). Rules 1 to 5 are unchanged.
+On 2026-11-14, sections 3, 4 and 7 recorded the `webview2` backend, the `web` app and the UI layout
+decision (owner-approved spec `2026-11-14-offline-essentials-and-ui.md`). Rules 1 to 5 are unchanged.
