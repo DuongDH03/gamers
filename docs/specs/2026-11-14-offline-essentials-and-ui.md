@@ -726,3 +726,114 @@ Build and tests: `mingw` and `msvc` both build with zero warnings, and
 `ctest` passes 23 of 23 on both. (One MinGW run had `server_runs` fail while
 other agents' test runs were going at the same time, most likely the same
 fixed UDP port; it passed alone and in a full rerun.)
+
+## Results, part 6 (agent 7, React app)
+
+`ui/` is built as section 6a describes: Vite 7 + React 19 + TypeScript
+(strict), the four screens, a mock bridge for `npm run dev`, and Vitest
+tests. No C++ was touched. How to run it: `ui/README.md`.
+
+**For the backend (agent 6):**
+
+- **Loading `dist`.** `npm ci && npm run build` in `ui/` writes `ui/dist`:
+  `index.html`, one script and one stylesheet under `assets/` (about 218 KB,
+  66 KB gzipped). Paths are relative (`base: './'`), and the script is a
+  classic IIFE loaded with `defer` (not an ES module), so the page works both
+  from a virtual host and from a plain `file://` URL; both were checked in
+  headless Edge. Recommended:
+  `SetVirtualHostNameToFolderMapping(L"scraps.ui", <dist>, DENY_CORS)`, then
+  navigate to `https://scraps.ui/index.html`. During development the backend
+  can navigate to the Vite dev server instead (`npm run dev`, default
+  `http://localhost:5173/`) to get React hot reload inside the game window.
+- **The canvas.** `index.html` has `<canvas id="world">` before
+  `<div id="ui">`, outside React, so React never replaces it. It is
+  `position: fixed`, full window, `z-index: 0`; the UI is `z-index: 1`. The
+  page sets `window.scrapsCanvas` to it and then fires
+  `window` event `scraps:canvas-ready` (`detail` = the canvas), both before
+  React mounts. A script injected with `AddScriptToExecuteOnDocumentCreated`
+  runs before the canvas exists, so it should wait for that event (or
+  `DOMContentLoaded` and `document.getElementById('world')`). The page never
+  draws on it and never sets its `width`/`height` in WebView2: the backend
+  sizes the drawing buffer (CSS size times `devicePixelRatio`) and gets the
+  `webgl2` context. Only the mock (plain browser) draws a 2D placeholder.
+- **Messages.** The page picks the WebView2 transport when
+  `window.chrome.webview.postMessage` exists. It sends actions as objects
+  with `postMessage(obj)`: read them with `get_WebMessageAsJson` (not
+  `TryGetWebMessageAsString`, which fails for objects). It listens to the
+  `message` event and reads `event.data`, so send views with
+  `PostWebMessageAsJson`. JSON text (`PostWebMessageAsString`) is accepted
+  too, up to 16 KB.
+- **The first view.** The page shows "Waiting for the game…" until the
+  first valid view. Native should send the current view after
+  `NavigationCompleted` (and again after a reload, for example F5 in
+  DevTools).
+- **What the validator requires.** All fields of the 6a view except
+  `notice` and `commands`, with exact JSON types; volumes finite and within
+  0..1; `game` up to 64 characters, `hud` and `notice` up to 256; at most 16
+  `commands`, each matching `^[A-Za-z][A-Za-z0-9_]{0,31}$`. A message that
+  breaks any of these is ignored whole (counted in `bridge.stats.rejected`),
+  so the view keeps the last good state.
+- **Notices.** A notice shows when a view's `notice` is non-empty and differs
+  from the previous view's. Send it once and `""` in the next view: the same
+  text in two views in a row counts as one notice, so "saved" twice needs a
+  view with `""` (or any other change of `notice`) in between.
+- **Actions.** Exactly 6a's shapes: `{type, name}` for the app actions;
+  `{type, name: "set_music_volume" | "set_effects_volume", value}` with
+  `value` in 0..1 rounded to 0.01 (sent on every slider step, while
+  dragging too); `{type, name: "command", command}` with a name from
+  `commands`. Continue is shown offline only and only enabled with
+  `has_save`; it sends `continue`.
+- **Input focus.**
+  - `#ui` has `pointer-events: none`. While playing, only the HUD's buttons
+    (pause, commands) take the mouse; clicks and the wheel anywhere else
+    reach the canvas. The menu screens (main, paused, settings) cover the
+    window and take the mouse.
+  - While playing, the page leaves the keyboard alone except Esc: no
+    `preventDefault` on other keys, the HUD buttons have `tabindex="-1"` and
+    never keep focus, and focus is dropped from menu items when the screen
+    becomes `playing`. So with the canvas area under the mouse, keyboard
+    events reach `document`/`window` untouched for the backend to forward,
+    and the backend should forward game keys only while `screen` is
+    `playing`.
+  - **Esc is the page's**: while playing it sends `pause` (offline), in the
+    pause menu `resume`, in settings `close_settings`; key repeats are
+    ignored. The backend should not also turn Esc into pause, or it pauses
+    twice.
+  - In menus, arrow keys move focus (Left/Right move a slider), Enter and
+    Space activate, Home/End jump. The page reads the gamepad through the
+    browser Gamepad API **only in menus** (d-pad or left stick moves, south
+    activates, east = Esc); while playing it ignores the pad, which stays
+    the game's (and start still toggles pause natively). Buttons already
+    held when a menu opens are ignored until released.
+  - In WebView2 the browser context menu is turned off by the page. The
+    backend may also want `AreDefaultContextMenusEnabled = false`, and
+    `AreBrowserAcceleratorKeysEnabled = false` in release builds (so Ctrl+R
+    or F5 don't reload the UI).
+
+**Files:** `ui/package.json`, `ui/package-lock.json`, `ui/.npmrc`
+(`save-exact`), `ui/.gitignore` (`node_modules/`, `dist/`), `ui/index.html`,
+`ui/vite.config.ts`, `ui/tsconfig.json`, `ui/README.md`, `ui/src/main.tsx`,
+`bridge.ts`, `connect.ts`, `mockBridge.ts`, `mockWorld.ts`, `App.tsx`,
+`nav.ts`, `labels.ts`, `styles.css`, `screens/{common,MainMenu,Hud,
+PauseMenu,Settings}.tsx`, `test/{setup.ts,helpers.tsx,bridge.test.ts,
+mockBridge.test.ts,app.test.tsx}`.
+
+**Versions (exact):** react and react-dom 19.2.9; vite 7.3.8;
+@vitejs/plugin-react 5.2.0; typescript 5.9.3; vitest 4.1.12; jsdom 26.1.0;
+@testing-library/react 16.3.3, dom 10.4.2, user-event 14.6.10, jest-dom
+6.9.1; @types/react 19.2.18, @types/react-dom 19.2.7, @types/node 20.19.43.
+Newer majors (vitest 5, jsdom 27+, jest-dom 6.10+) need Node 22, so they
+were not used; vitest 3.2 was replaced with 4.1.12 because `npm audit`
+flagged its `@vitest/mocker` and `tinypool`. `npm audit`: 0 vulnerabilities.
+
+**Checks:** `npm run typecheck` clean; `npm test` 3 files, 115 tests pass
+(validation with 40 hostile cases, every screen, the exact JSON of every
+button, Esc on each screen, sliders, `commands` buttons, online hiding,
+notices, keyboard and gamepad focus, a whole round against the mock);
+`npm run build` clean, `dist` 218,091 bytes. `vite preview` served the page
+and script (HTTP 200), and headless Edge rendered the built page from
+`file://` and the dev server, with screenshots at 1280×720 and 1920×1080
+over bright and dark worlds.
+
+**Not verified here:** the page inside a real WebView2 window with the
+backend (agent 6); a real gamepad in the menus; a screen reader.
