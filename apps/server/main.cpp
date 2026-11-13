@@ -9,12 +9,14 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstddef>
 #include <cstdlib>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "backends/dynlib/command_line.h"
 #include "backends/dynlib/library.h"
 #include "backends/udp/udp_net.h"
 #include "common/game_module.h"
@@ -54,7 +56,7 @@ void print_usage() {
       "  --scene <name>            scene to host (default: %s)\n"
       "  --scene-dir <dir>         where .scene files are (default: scenes/ next to this\n"
       "                            program, else the game's source folder)\n"
-      "  --port <n>                UDP port (default: 7777)\n"
+      "  --port <n>                UDP port (default: 7777; 0 = any free one, printed)\n"
       "  --bind <ip>               interface to listen on (default: 0.0.0.0 = all;\n"
       "                            127.0.0.1 = this machine only)\n"
       "  --max-players <n>         1 to 16 (default: 10)\n"
@@ -79,10 +81,12 @@ bool parse_long(const char* text, long min_value, long max_value, long& out) {
   return true;
 }
 
-bool parse_options(int argc, char** argv, Options& options) {
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    const bool has_value = i + 1 < argc;
+// `args`: UTF-8 (dynlib::utf8_arguments), so --load, --save and --scene-dir
+// may name any folder.
+bool parse_options(const std::vector<std::string>& args, Options& options) {
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string& arg = args[i];
+    const bool has_value = i + 1 < args.size();
     if (arg == "--help" || arg == "-h") {
       options.help = true;
     } else if (arg == "--hot-game") {
@@ -96,26 +100,28 @@ bool parse_options(int argc, char** argv, Options& options) {
       std::fprintf(stderr, "unknown option or missing value: %s\n", arg.c_str());
       return false;
     } else if (arg == "--scene") {
-      options.scene = argv[++i];
+      options.scene = args[++i];
       options.scene_given = true;
     } else if (arg == "--load") {
-      options.load = argv[++i];
+      options.load = args[++i];
     } else if (arg == "--save") {
-      options.save = argv[++i];
+      options.save = args[++i];
     } else if (arg == "--scene-dir") {
-      options.scene_dir = argv[++i];
+      options.scene_dir = args[++i];
     } else if (arg == "--bind") {
-      options.bind = argv[++i];
+      options.bind = args[++i];
     } else if (arg == "--port") {
-      if (!parse_long(argv[++i], 1, 65535, options.port)) return false;
+      // 0: any free port, chosen by the system and printed (tests run many
+      // servers at once).
+      if (!parse_long(args[++i].c_str(), 0, 65535, options.port)) return false;
     } else if (arg == "--max-players") {
-      if (!parse_long(argv[++i], 1, scraps::kMaxPlayers, options.max_players)) return false;
+      if (!parse_long(args[++i].c_str(), 1, scraps::kMaxPlayers, options.max_players)) return false;
     } else if (arg == "--snapshot-interval") {
-      if (!parse_long(argv[++i], 1, 60, options.snapshot_interval)) return false;
+      if (!parse_long(args[++i].c_str(), 1, 60, options.snapshot_interval)) return false;
     } else if (arg == "--ticks") {
-      if (!parse_long(argv[++i], 1, 1000000000L, options.ticks)) return false;
+      if (!parse_long(args[++i].c_str(), 1, 1000000000L, options.ticks)) return false;
     } else if (arg == "--threads") {
-      if (!parse_long(argv[++i], 0, 64, options.threads)) return false;
+      if (!parse_long(args[++i].c_str(), 0, 64, options.threads)) return false;
     } else {
       std::fprintf(stderr, "unknown option '%s'\n", arg.c_str());
       return false;
@@ -130,7 +136,7 @@ int main(int argc, char** argv) {
   using namespace scraps;
 
   Options options;
-  if (!parse_options(argc, argv, options)) {
+  if (!parse_options(dynlib::utf8_arguments(argc, argv), options)) {
     print_usage();
     return 2;
   }
@@ -220,11 +226,13 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::printf("Scraps server: scene '%s' (%s), listening on %s:%ld, up to %ld players, %u worker threads\n",
-              scene.name.c_str(), perspective_name(scene.level.perspective), options.bind.c_str(), options.port,
+  // The port actually bound: with --port 0 the system picked it.
+  const unsigned port = net->local_address().port;
+  std::printf("Scraps server: scene '%s' (%s), listening on %s:%u, up to %ld players, %u worker threads\n",
+              scene.name.c_str(), perspective_name(scene.level.perspective), options.bind.c_str(), port,
               options.max_players, jobs.worker_count());
-  std::printf("Clients join with: scraps_client --connect <this machine's ip>:%ld   (Ctrl+C stops the server)\n",
-              options.port);
+  std::printf("Clients join with: scraps_client --connect <this machine's ip>:%u   (Ctrl+C stops the server)\n",
+              port);
   std::fflush(stdout);
 
   FixedStepClock clock;

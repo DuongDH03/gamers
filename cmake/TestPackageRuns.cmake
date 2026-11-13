@@ -50,25 +50,44 @@ endif()
 file(TO_NATIVE_PATH "${windows}" windows)
 set(ENV{PATH} "${windows}\\System32;${windows}")
 
-execute_process(COMMAND "${prefix}/scraps_client.exe" --headless --frames 120
-                WORKING_DIRECTORY "${elsewhere}"
-                RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output
-                TIMEOUT 120)
-message(STATUS "scraps_client:\n${output}")
-if(NOT result EQUAL 0)
-  message(FATAL_ERROR "the installed client failed (${result}); a DLL may be missing from the install")
-endif()
-# It must have used the installed scenes, not the source folder compiled in.
-string(FIND "${output}" "scenes from ${prefix}/scenes (next to the executable)" found)
-if(found EQUAL -1)
-  message(FATAL_ERROR "the installed client did not take its scenes from ${prefix}/scenes")
-endif()
+# run_installed(<folder>): the client and the server installed in <folder>
+# start, from another working folder, and take their scenes from it. Output
+# is read as UTF-8, like the apps print it.
+function(run_installed folder)
+  execute_process(COMMAND "${folder}/scraps_client.exe" --headless --frames 120
+                  WORKING_DIRECTORY "${elsewhere}"
+                  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output
+                  ENCODING UTF-8 TIMEOUT 120)
+  message(STATUS "scraps_client in ${folder}:\n${output}")
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "the client installed in ${folder} failed (${result}); a DLL may be missing from the install")
+  endif()
+  # It must have used the installed scenes, not the source folder compiled in.
+  string(FIND "${output}" "scenes from ${folder}/scenes (next to the executable)" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "the client installed in ${folder} did not take its scenes from ${folder}/scenes")
+  endif()
 
-execute_process(COMMAND "${prefix}/scraps_server.exe" --bind 127.0.0.1 --port 47779 --ticks 30
-                WORKING_DIRECTORY "${elsewhere}"
-                RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output
-                TIMEOUT 60)
-message(STATUS "scraps_server:\n${output}")
-if(NOT result EQUAL 0)
-  message(FATAL_ERROR "the installed server failed (${result}); a DLL may be missing from the install")
-endif()
+  # --port 0: any free port, so parallel test runs never collide.
+  execute_process(COMMAND "${folder}/scraps_server.exe" --bind 127.0.0.1 --port 0 --ticks 30
+                  WORKING_DIRECTORY "${elsewhere}"
+                  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output
+                  ENCODING UTF-8 TIMEOUT 60)
+  message(STATUS "scraps_server in ${folder}:\n${output}")
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "the server installed in ${folder} failed (${result}); a DLL may be missing from the install")
+  endif()
+  string(FIND "${output}" "scenes from ${folder}/scenes (next to the executable)" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "the server installed in ${folder} did not take its scenes from ${folder}/scenes")
+  endif()
+endfunction()
+
+run_installed("${prefix}")
+
+# The same install in a folder whose name is not ASCII (a Windows user
+# name in Vietnamese, a CJK word, a space): the apps get that folder as
+# UTF-8 and must still open every scene, image, sound and music file in it.
+set(unicode "${WORK_DIR}/Phương 模块")
+file(COPY "${prefix}/" DESTINATION "${unicode}")
+run_installed("${unicode}")

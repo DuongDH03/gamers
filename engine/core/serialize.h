@@ -84,6 +84,12 @@ bool read_rules(ByteReader& reader, MovementRules& rules);
 void write_level(ByteWriter& writer, const Level& level);
 bool read_level(ByteReader& reader, Level& level);
 
+// The version of the World's byte format (the level, rules and state below).
+// It goes up whenever those bytes change, so data written by another build
+// is recognised as such: a save file records it (core/save.h) and refuses a
+// mismatch. History: 3 = sky, sounds, entity facing; 4 = music.
+constexpr std::uint16_t kWorldFormatVersion = 4;
+
 // The parts of a World that change while it runs: tick, random state and
 // entities. This is what a network snapshot carries; the Level is static and
 // both sides load it from the same scene file.

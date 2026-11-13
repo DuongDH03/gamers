@@ -282,7 +282,7 @@ void a_different_scene_file_is_refused(test::Context& ctx) {
   // A copy of the server's scene with one extra comment line: same name,
   // different contents.
   namespace fs = std::filesystem;
-  const fs::path dir = fs::temp_directory_path() / "scraps_test_scenes";
+  const fs::path dir = fs::u8path(SCRAPS_TEST_WORK_DIR) / "scraps_test_scenes";
   std::error_code ignored;
   fs::create_directories(dir, ignored);
   {
@@ -291,7 +291,7 @@ void a_different_scene_file_is_refused(test::Context& ctx) {
     copy << original.rdbuf() << "# edited\n";
   }
   Rig rig;
-  Client& client = rig.add_client(dir.string());
+  Client& client = rig.add_client(dir.u8string());
   rig.frames(10);
   CHECK(client.state() == ClientState::kFailed);
   CHECK(client.error().find("differs") != std::string::npos);
@@ -482,7 +482,7 @@ void remote_players_are_interpolated_without_overshoot(test::Context& ctx) {
 // A scene edited while the game runs: everyone gets the new level and keeps playing.
 void hot_reload_reaches_every_client(test::Context& ctx) {
   namespace fs = std::filesystem;
-  const fs::path dir = fs::temp_directory_path() / "scraps_reload_test";
+  const fs::path dir = fs::u8path(SCRAPS_TEST_WORK_DIR) / "scraps_reload_test";
   std::error_code ignored;
   fs::create_directories(dir, ignored);
   std::string original;
@@ -492,9 +492,9 @@ void hot_reload_reaches_every_client(test::Context& ctx) {
     std::ofstream(dir / "top-down.scene", std::ios::binary) << original;
   }
 
-  Rig rig(ServerConfig(), "top-down", dir.string());
-  Client& a = rig.add_client(dir.string());
-  Client& b = rig.add_client(dir.string());
+  Rig rig(ServerConfig(), "top-down", dir.u8string());
+  Client& a = rig.add_client(dir.u8string());
+  Client& b = rig.add_client(dir.u8string());
   rig.frames(10);
   CHECK(a.state() == ClientState::kConnected && b.state() == ClientState::kConnected);
   const std::uint32_t generation_a = a.world_generation();
@@ -507,7 +507,7 @@ void hot_reload_reaches_every_client(test::Context& ctx) {
   { std::ofstream(dir / "top-down.scene", std::ios::binary) << edited; }
   Scene scene;
   std::string error;
-  CHECK(load_scene(dir.string(), "top-down", scene, error));
+  CHECK(load_scene(dir.u8string(), "top-down", scene, error));
 
   // Client b misses the Welcome that announces the reload (all packets lost
   // for a moment); it must notice from the snapshots and ask again.

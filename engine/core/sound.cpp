@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include "core/audio_convert.h"
+#include "core/file_path.h"
 #include "third_party/audio_decoders.h"
 
 namespace scraps {
@@ -214,8 +215,8 @@ bool decode_sound(const std::uint8_t* data, std::size_t size, SoundData& out, st
 }
 
 bool load_sound(const std::string& path, SoundData& out, std::string& error) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
+  std::ifstream file;
+  if (!open_file_for_reading(path, file)) {
     error = "cannot open '" + path + "'";
     return false;
   }

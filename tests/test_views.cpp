@@ -1,17 +1,27 @@
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <limits>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "backends/headless/headless_backend.h"
+#include "core/file_watch.h"
+#include "core/image.h"
+#include "core/mixer.h"
+#include "core/music.h"
 #include "core/scene.h"
+#include "core/sound.h"
 #include "harness.h"
 #include "test_world.h"
 #include "views/controls.h"
+#include "views/scene_music.h"
 #include "views/sound_bank.h"
 #include "views/sprite_bank.h"
 #include "views/view_factory.h"
@@ -1064,7 +1074,77 @@ void bundled_sounds_load_in_every_scene(test::Context& ctx) {
   }
 }
 
+// Scene folders are UTF-8 strings (the exe's folder, --scene-dir), and an
+// install may sit in a folder whose name is not ASCII: a user name in
+// Vietnamese, a CJK word. Every file a game opens by name must open from
+// there: the scene, its images (also through SpriteBank), sounds (SoundBank),
+// music (SceneMusic), and the scene file's watcher for hot reload.
+void scene_files_load_from_a_non_ascii_folder(test::Context& ctx) {
+  namespace fs = std::filesystem;
+  // "scenes Phương 模块": U+01B0 (two bytes), two CJK characters (three each).
+  const std::string folder_name = "scenes Ph\xc6\xb0\xc6\xa1ng \xe6\xa8\xa1\xe5\x9d\x97";
+  const fs::path work = fs::u8path(SCRAPS_TEST_WORK_DIR) / "non_ascii";
+  const fs::path folder = work / fs::u8path(folder_name);
+  std::error_code fs_error;
+  fs::remove_all(work, fs_error);
+  fs::create_directories(work, fs_error);
+  fs::copy(fs::u8path(SCRAPS_SANDBOX_SCENE_DIR), folder, fs::copy_options::recursive, fs_error);
+  CHECK(!fs_error);
+  const std::string dir = folder.generic_u8string();
+  CHECK(dir.find("\xe6\xa8\xa1") != std::string::npos);
+
+  Scene scene;
+  std::string error;
+  CHECK(load_scene(dir, "side", scene, error));
+  if (!error.empty()) std::printf("    %s\n", error.c_str());
+  CHECK(scene.name == "side");
+
+  Image image;
+  CHECK(load_png(dir + "/art/hero.png", image, error));
+  CHECK(image.width > 0 && image.height > 0);
+  SoundData sound;
+  CHECK(load_sound(dir + "/sounds/jump.wav", sound, error));
+  CHECK(load_sound(dir + "/sounds/coin.ogg", sound, error));
+  CHECK(load_sound(dir + "/sounds/drop.mp3", sound, error));
+  MusicStream stream;
+  CHECK(open_music(dir + "/sounds/music.ogg", stream, error));
+
+  // The same files through the views that load them for a running game.
+  const World world = make_world(scene, MovementRules());
+  headless::HeadlessRenderer renderer(800, 600);
+  SpriteBank sprites;
+  std::string errors;
+  CHECK(sprites.load(world.level, dir, renderer, errors));
+  if (!errors.empty()) std::printf("    %s\n", errors.c_str());
+  Mixer mixer;
+  SoundBank sounds;
+  CHECK(sounds.load(world.level, dir, mixer, errors));
+  CHECK(mixer.sound_count() == world.level.sounds.size() && mixer.sound_count() >= 3);
+  SceneMusic music;
+  CHECK(music.update(world.level, dir, mixer, error));
+  CHECK(mixer.music_playing());
+
+  // Hot reload watches the scene file by its UTF-8 path.
+  const std::string scene_file = dir + "/side.scene";
+  FileWatcher watcher(scene_file);
+  CHECK(!watcher.changed());
+  const fs::path native = folder / "side.scene";
+  {
+    std::ofstream append(native, std::ios::binary | std::ios::app);
+    append << "# edited\n";
+  }
+  fs::last_write_time(native, fs::last_write_time(native, fs_error) + std::chrono::seconds(5), fs_error);
+  CHECK(watcher.changed());
+  CHECK(!watcher.changed());
+
+  // A path that is not UTF-8 at all is an error, never a throw or a crash.
+  CHECK(!load_scene_file(dir + "/\xff.scene", scene, error));
+  CHECK(!error.empty());
+  fs::remove_all(work, fs_error);
+}
+
 void register_view_tests(test::Registry& registry) {
+  registry.add("views.scene_files_load_from_a_non_ascii_folder", scene_files_load_from_a_non_ascii_folder);
   registry.add("views.bundled_sounds_load_in_every_scene", bundled_sounds_load_in_every_scene);
   registry.add("views.sprite_faces_the_way_it_last_moved", sprite_faces_the_way_it_last_moved);
   registry.add("views.shadow_sits_on_the_ground_below", shadow_sits_on_the_ground_below);

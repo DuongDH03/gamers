@@ -58,4 +58,10 @@ class Library {
 // part 5), and the OS call needs windows.h.
 std::string executable_directory();
 
+// The folder part of a file path, with '/' separators: "C:/Games/app.exe"
+// gives "C:/Games". A root keeps its separator ("C:\app.exe" gives "C:/",
+// "/app" gives "/"); a bare file name gives "". executable_directory() uses
+// it; it touches no file.
+std::string directory_of(const std::string& file_path);
+
 }  // namespace scraps::dynlib

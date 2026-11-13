@@ -12,6 +12,7 @@ namespace scraps {
 class FileWatcher {
  public:
   FileWatcher() = default;
+  // `path` is UTF-8, like every path in the engine (core/file_path.h).
   explicit FileWatcher(std::string path);
   // The same for a path already converted (e.g. with std::filesystem::u8path,
   // so non-ASCII names work on Windows); path() is then its UTF-8 form.

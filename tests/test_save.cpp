@@ -6,10 +6,12 @@
 //   pause.*  pausing an offline game the way scraps_client does it
 //            (apps/common/pause.h): no ticks, no timeouts, no burst after
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -18,6 +20,7 @@
 
 #include "common/pause.h"
 #include "common/save_game.h"
+#include "common/scene_reload.h"
 #include "core/fixed_step.h"
 #include "core/save.h"
 #include "core/scene.h"
@@ -37,10 +40,10 @@ constexpr double kFrame = 1.0 / 60.0;
 
 const char* game_name() { return sandbox::game_api()->name; }
 
-Scene load_sandbox_scene(const char* name) {
+Scene load_sandbox_scene(const char* name, const std::string& directory = SCRAPS_SANDBOX_SCENE_DIR) {
   Scene scene;
   std::string error;
-  if (!load_scene(SCRAPS_SANDBOX_SCENE_DIR, name, scene, error)) std::printf("    %s: %s\n", name, error.c_str());
+  if (!load_scene(directory, name, scene, error)) std::printf("    %s: %s\n", name, error.c_str());
   return scene;
 }
 
@@ -109,9 +112,11 @@ std::string work_file(const char* name) {
 // An offline session as scraps_client runs it: the real Server and a Client
 // (or two) over a LoopbackHub, stepped in turn, through the app's pause.
 struct Offline {
-  explicit Offline(const char* scene_name = "top-down", double latency = 0.0) : server_net(hub, std::uint16_t{1}) {
+  explicit Offline(const char* scene_name = "top-down", double latency = 0.0,
+                   std::string directory = SCRAPS_SANDBOX_SCENE_DIR)
+      : server_net(hub, std::uint16_t{1}), scene_directory(std::move(directory)) {
     hub.set_latency(latency);
-    const Scene scene = load_sandbox_scene(scene_name);
+    const Scene scene = load_sandbox_scene(scene_name, scene_directory);
     ServerConfig config;
     config.cookie_secret = CookieSecret{0x0123456789ABCDEFull, 0x1122334455667788ull};
     server = std::make_unique<Server>(server_net, world_from(scene), &sandbox::simulate, scene.name,
@@ -122,7 +127,7 @@ struct Offline {
   Client& add_client() {
     nets.push_back(std::make_unique<LoopbackNet>(hub, static_cast<std::uint16_t>(2 + nets.size())));
     ClientConfig config;
-    config.scene_directory = SCRAPS_SANDBOX_SCENE_DIR;
+    config.scene_directory = scene_directory;
     clients.push_back(std::make_unique<Client>(*nets.back(), server_net.local_address(), &sandbox::simulate, config));
     return *clients.back();
   }
@@ -165,6 +170,7 @@ struct Offline {
 
   LoopbackHub hub;
   LoopbackNet server_net;
+  std::string scene_directory;
   std::vector<std::unique_ptr<LoopbackNet>> nets;
   std::unique_ptr<Server> server;
   std::vector<std::unique_ptr<Client>> clients;
@@ -220,6 +226,7 @@ void header_describes_the_save(test::Context& ctx) {
   std::string error;
   CHECK(read_save_header(bytes.data(), bytes.size(), header, error));
   CHECK(header.version == kSaveFormatVersion);
+  CHECK(header.world_format == kWorldFormatVersion);
   CHECK(header.game_name == "sandbox");
   CHECK(header.scene_name == "side");
   CHECK(header.scene_hash == scene.content_hash);
@@ -295,11 +302,11 @@ void corrupted_file_is_refused(test::Context& ctx) {
 
   // A damaged world with a correct checksum (someone edited the file): the
   // state is still validated like network input. Slot 0's "alive" byte, a
-  // bool, set to 7: the state starts after magic, version, the two names,
-  // hash, tick and the state size; then tick u32, rng u64, slot count u32,
-  // generation u32.
+  // bool, set to 7: the state starts after magic, version, world format,
+  // the two names, hash, tick and the state size; then tick u32, rng u64,
+  // slot count u32, generation u32.
   std::vector<std::uint8_t> edited = bytes;
-  const std::size_t state_at = 4 + 2 + 1 + std::string("sandbox").size() + 1 + scene.name.size() + 4 + 4 + 4;
+  const std::size_t state_at = 4 + 2 + 2 + 1 + std::string("sandbox").size() + 1 + scene.name.size() + 4 + 4 + 4;
   edited[state_at + 4 + 8 + 4 + 4] = 7;
   resign(edited);
   world = untouched;
@@ -319,9 +326,40 @@ void other_version_is_refused(test::Context& ctx) {
   SaveHeader header;
   std::string error;
   CHECK(read_save(bytes.data(), bytes.size(), target_for(scene), world, header, error) == SaveLoad::kRefused);
-  CHECK(contains(error, "version 2"));
-  CHECK(contains(error, "version 1"));
+  CHECK(contains(error, ("version " + std::to_string(kSaveFormatVersion + 1)).c_str()));
+  CHECK(contains(error, ("version " + std::to_string(kSaveFormatVersion)).c_str()));
   CHECK(!read_save_header(bytes.data(), bytes.size(), header, error));
+}
+
+// A save from a build that writes the World's bytes differently (another
+// kWorldFormatVersion) is a whole, undamaged file whose state this build
+// would misread: refused by its header alone, with both versions named.
+void other_world_format_is_refused(test::Context& ctx) {
+  const Scene scene = load_sandbox_scene("top-down");
+  std::vector<std::uint8_t> bytes;
+  write_save(played_world(scene, 30), scene.name, scene.content_hash, game_name(), bytes);
+  CHECK(bytes.size() > 8 && bytes[6] == (kWorldFormatVersion & 0xFF) && bytes[7] == (kWorldFormatVersion >> 8));
+  const World untouched = world_from(scene);
+  const std::vector<std::uint8_t> untouched_state = state_bytes(untouched);
+
+  for (const std::uint16_t other : {static_cast<std::uint16_t>(kWorldFormatVersion - 1),
+                                    static_cast<std::uint16_t>(kWorldFormatVersion + 1)}) {
+    std::vector<std::uint8_t> file = bytes;
+    file[6] = static_cast<std::uint8_t>(other & 0xFF);  // u16 after the magic and the save format version
+    file[7] = static_cast<std::uint8_t>(other >> 8);
+    resign(file);
+
+    World world = untouched;
+    SaveHeader header;
+    std::string error;
+    CHECK(read_save(file.data(), file.size(), target_for(scene), world, header, error) == SaveLoad::kRefused);
+    CHECK(contains(error, "world format"));
+    CHECK(contains(error, ("version " + std::to_string(other)).c_str()));
+    CHECK(contains(error, ("version " + std::to_string(kWorldFormatVersion)).c_str()));
+    CHECK(state_bytes(world) == untouched_state);
+    CHECK(!read_save_header(file.data(), file.size(), header, error));
+    CHECK(contains(error, "world format"));
+  }
 }
 
 void other_scene_or_game_is_refused(test::Context& ctx) {
@@ -435,6 +473,57 @@ void prediction_restarts_after_a_load_over_latency(test::Context& ctx) {
   if (server_player == nullptr || client_player == nullptr) return;
   CHECK(distance(client_player->position, server_player->position) < 0.01f);
   CHECK(distance(server_player->position, saved_position) < 1.0f);  // back where it was saved (side view: it may settle)
+}
+
+// A load to a later tick than the running one (start a game, then load a
+// save made far ahead): the ticks go forward, so only the server's explicit
+// "new world" (the world epoch in its snapshots, net/protocol.h) can tell
+// the client this is a replacement, not a correction. Its own player starts
+// over from the loaded world without blending from the old one, and other
+// players are drawn from the new world's snapshots only.
+void a_forward_load_starts_prediction_over(test::Context& ctx) {
+  Offline ahead;
+  CHECK(ahead.join());
+  ahead.frames(300, Vec2(1.0f, 0.2f));
+  const std::string path = work_file("ahead.sav");
+  std::string error;
+  CHECK(scraps_apps::save_game(*ahead.server, game_name(), path, error));
+  const Tick saved_tick = ahead.server->world().tick;
+  const Vec3 saved_position = find_entity(ahead.server->world(), player_entity(ahead.server->world(), 0))->position;
+
+  Offline game;
+  Client& other = game.add_client();
+  CHECK(game.join());
+  game.frames(20, Vec2(-1.0f, -0.6f));
+  CHECK(game.server->world().tick + 200 < saved_tick);
+  const Entity* before = find_entity(game.server->world(), player_entity(game.server->world(), 0));
+  CHECK(before != nullptr && distance(before->position, saved_position) > 2.0f);
+
+  SaveHeader header;
+  CHECK(scraps_apps::load_game(*game.server, game_name(), SCRAPS_SANDBOX_SCENE_DIR, path, header, error) ==
+        SaveLoad::kLoaded);
+  game.frame();
+  CHECK(game.client().state() == ClientState::kConnected);
+  CHECK(game.server->world().tick == saved_tick + 1);
+  CHECK(game.client().current_world().tick == saved_tick + 1);
+  CHECK(state_bytes(game.client().current_world()) == state_bytes(game.server->world()));
+  // No blend: the previous world is the loaded one too, not the old game.
+  CHECK(game.client().previous_world().tick == game.client().current_world().tick);
+  const Entity* shown = find_entity(game.client().display_world(0.5f), game.client().local_entity());
+  CHECK(shown != nullptr && distance(shown->position, saved_position) < 0.5f);
+
+  // The other client draws player 0 from the new world's snapshot alone,
+  // exactly where the server has it, not partway from the old position.
+  const World& server_world = game.server->world();
+  const Entity* truth = find_entity(server_world, player_entity(server_world, 0));
+  const Entity* seen = find_entity(other.display_world(0.0f), player_entity(other.current_world(), 0));
+  CHECK(truth != nullptr && seen != nullptr);
+  if (truth != nullptr && seen != nullptr) CHECK(distance(seen->position, truth->position) < 1e-4f);
+
+  // And both play on in step with the server.
+  game.frames(60, Vec2(0.0f, 1.0f));
+  CHECK(game.client().state() == ClientState::kConnected && other.state() == ClientState::kConnected);
+  CHECK(state_bytes(game.client().current_world()) == state_bytes(game.server->world()));
 }
 
 void load_removes_players_who_are_not_here(test::Context& ctx) {
@@ -609,6 +698,59 @@ void online_the_client_ignores_pause(test::Context& ctx) {
   CHECK(game.server->world().tick == tick + 30);
 }
 
+// Editing the scene while paused: a reload then would leave the player out
+// of the world until resume (re-joining needs a tick), so the reloader
+// waits. The paused game keeps showing the world as it was; the edit is
+// applied at the first check after resuming, with the player in it.
+void a_scene_edit_while_paused_waits_for_resume(test::Context& ctx) {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::u8path(SCRAPS_TEST_WORK_DIR) / "save" / "paused_reload";
+  std::error_code fs_error;
+  fs::remove_all(dir, fs_error);
+  fs::create_directories(dir.parent_path(), fs_error);
+  fs::copy(fs::u8path(SCRAPS_SANDBOX_SCENE_DIR), dir, fs::copy_options::recursive, fs_error);
+  CHECK(!fs_error);
+
+  Offline game("top-down", 0.0, dir.u8string());
+  CHECK(game.join());
+  game.frames(30, Vec2(1.0f, 0.0f));
+  scraps_apps::SceneReloader reloader(dir.u8string(), "top-down");
+  const std::uint32_t old_hash = game.server->scene_hash();
+  const Tick tick = game.server->world().tick;
+
+  CHECK(game.pause.set(true, game.server.get(), game.client(), game.clock));
+  const fs::path file = dir / "top-down.scene";
+  {
+    std::ofstream append(file, std::ios::binary | std::ios::app);
+    append << "# edited while paused\n";
+  }
+  fs::last_write_time(file, fs::last_write_time(file, fs_error) + std::chrono::seconds(5), fs_error);
+
+  std::string message;
+  int reloads = 0;
+  for (int i = 0; i < 180; ++i) {  // 3 s paused, polled every frame like the app does
+    game.frame();
+    if (reloader.poll(game.now, *game.server, message)) ++reloads;
+  }
+  CHECK(reloads == 0);
+  CHECK(game.server->scene_hash() == old_hash);
+  CHECK(game.server->world().tick == tick);
+  CHECK(find_entity(game.client().current_world(), game.client().local_entity()) != nullptr);
+  CHECK(find_entity(game.client().display_world(0.0f), game.client().local_entity()) != nullptr);
+
+  // Resumed: the edit is picked up at once, and the player is in the new world.
+  CHECK(game.pause.set(false, game.server.get(), game.client(), game.clock));
+  CHECK(reloader.poll(game.now, *game.server, message));
+  CHECK(message.find("reloaded") != std::string::npos);
+  CHECK(game.server->scene_hash() != old_hash);
+  game.frames(10);
+  CHECK(game.client().state() == ClientState::kConnected);
+  CHECK(game.client().scene_name() == "top-down");
+  CHECK(find_entity(game.server->world(), player_entity(game.server->world(), 0)) != nullptr);
+  CHECK(find_entity(game.client().current_world(), game.client().local_entity()) != nullptr);
+  fs::remove_all(dir, fs_error);
+}
+
 }  // namespace
 
 void register_save_tests(test::Registry& registry) {
@@ -617,10 +759,12 @@ void register_save_tests(test::Registry& registry) {
   registry.add("save.truncated_file_is_refused", truncated_file_is_refused);
   registry.add("save.corrupted_file_is_refused", corrupted_file_is_refused);
   registry.add("save.other_version_is_refused", other_version_is_refused);
+  registry.add("save.other_world_format_is_refused", other_world_format_is_refused);
   registry.add("save.other_scene_or_game_is_refused", other_scene_or_game_is_refused);
   registry.add("save.changed_scene_loads_with_a_warning", changed_scene_loads_with_a_warning);
   registry.add("save.offline_save_play_load", offline_save_play_load);
   registry.add("save.prediction_restarts_after_a_load_over_latency", prediction_restarts_after_a_load_over_latency);
+  registry.add("save.a_forward_load_starts_prediction_over", a_forward_load_starts_prediction_over);
   registry.add("save.load_removes_players_who_are_not_here", load_removes_players_who_are_not_here);
   registry.add("save.a_refused_load_changes_nothing", a_refused_load_changes_nothing);
   registry.add("pause.ten_seconds_give_no_ticks_and_no_disconnect", ten_seconds_of_pause_give_no_ticks_and_no_disconnect);
@@ -629,4 +773,5 @@ void register_save_tests(test::Registry& registry) {
   registry.add("pause.resuming_runs_no_burst_of_ticks", resuming_runs_no_burst_of_ticks);
   registry.add("pause.clock_reset_drops_the_leftover", clock_reset_drops_the_leftover);
   registry.add("pause.online_the_client_ignores_pause", online_the_client_ignores_pause);
+  registry.add("pause.a_scene_edit_while_paused_waits_for_resume", a_scene_edit_while_paused_waits_for_resume);
 }

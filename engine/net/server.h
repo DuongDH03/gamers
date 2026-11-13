@@ -179,6 +179,9 @@ class Server {
   };
   std::array<SentState, kSnapshotWindow> m_sent{};
   std::uint32_t m_snapshot_id = 0;
+  // Goes up by one each time the world is replaced (reload, load_state);
+  // sent in every snapshot so clients tell a replacement from a correction.
+  std::uint32_t m_world_epoch = 0;
   int m_ticks_since_snapshot = 0;
   std::uint64_t m_dropped_commands = 0;
   std::uint64_t m_unsent_snapshots = 0;

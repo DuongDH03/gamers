@@ -420,11 +420,12 @@ void png_files_decode_and_bad_data_fails(test::Context& ctx) {
 
 void file_watcher_notices_edits(test::Context& ctx) {
   namespace fs = std::filesystem;
-  const fs::path path = fs::temp_directory_path() / "scraps_watch_test.txt";
-  { std::ofstream(path) << "one"; }
-  FileWatcher watcher(path.string());
-  CHECK(!watcher.changed());
+  const fs::path path = fs::u8path(SCRAPS_TEST_WORK_DIR) / "scraps_watch_test.txt";
   std::error_code ignored;
+  fs::create_directories(path.parent_path(), ignored);
+  { std::ofstream(path) << "one"; }
+  FileWatcher watcher(path.u8string());
+  CHECK(!watcher.changed());
   fs::last_write_time(path, fs::last_write_time(path) + std::chrono::seconds(2), ignored);
   CHECK(watcher.changed());
   CHECK(!watcher.changed());  // once per change

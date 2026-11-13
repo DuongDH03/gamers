@@ -180,6 +180,7 @@ bool Client::load_world(const WelcomeMessage& welcome) {
   m_acked_snapshot = kFullSnapshot;
   m_snapshot_pending = false;
   m_world_replaced = false;
+  m_has_epoch = false;  // the next full snapshot names the new world's epoch
   m_sample_count = 0;
   m_sample_next = 0;
   m_has_world = true;
@@ -216,6 +217,14 @@ void Client::handle_fragment(ByteReader& reader, double now) {
     m_snapshot_pending = false;
     return;
   }
+  if (result == SnapshotRead::kReplaced) {
+    // The server replaced its world (a loaded save, earlier or later than
+    // this one): the samples belong to a world that is gone, and the next
+    // reconcile starts prediction over instead of blending.
+    m_sample_count = 0;
+    m_sample_next = 0;
+    m_world_replaced = true;
+  }
   keep_snapshot(m_assembler.snapshot_id());
   m_snapshot_pending = true;
   m_snapshot_ack = m_assembler.ack_sequence();
@@ -225,12 +234,20 @@ void Client::handle_fragment(ByteReader& reader, double now) {
 Client::SnapshotRead Client::read_snapshot(const std::uint8_t* data, std::size_t size) {
   ByteReader reader(data, size);
   const std::uint32_t baseline_id = reader.read_u32();
+  const std::uint32_t epoch = reader.read_u32();
   if (!reader.ok()) return SnapshotRead::kNoBaseline;  // nothing read into the world yet
   if (baseline_id == kFullSnapshot) {
     if (!read_world_state(reader, m_authoritative) || reader.remaining() != 0) return SnapshotRead::kCorrupt;
     ++m_full_snapshots;
-    return SnapshotRead::kOk;
+    // The first snapshot after a Welcome only tells us the epoch; a later
+    // one with another epoch means the server's world was replaced.
+    const bool replaced = m_has_epoch && epoch != m_world_epoch;
+    m_world_epoch = epoch;
+    m_has_epoch = true;
+    return replaced ? SnapshotRead::kReplaced : SnapshotRead::kOk;
   }
+  // A delta is read only against a state of the same world.
+  if (!m_has_epoch || epoch != m_world_epoch) return SnapshotRead::kNoBaseline;
   const KeptState& kept = m_kept[baseline_id % kSnapshotWindow];
   if (kept.id != baseline_id) {
     // Not kept (any more, or never: the server may be answering an older
@@ -256,16 +273,10 @@ void Client::keep_snapshot(std::uint32_t snapshot_id) {
 void Client::record_sample() {
   const World& world = m_authoritative;
   if (m_sample_count > 0) {
+    // Snapshots complete in order, and a replaced world cleared the samples
+    // (handle_fragment), so ticks only go up here; never twice the same one.
     const SnapshotSample& newest = m_samples[(m_sample_next + kSampleCount - 1) % kSampleCount];
-    if (world.tick < newest.tick) {
-      // Snapshots complete in order, so an earlier tick means the server
-      // loaded a save: the samples belong to a world that is gone.
-      m_sample_count = 0;
-      m_sample_next = 0;
-      m_world_replaced = true;
-    } else if (world.tick == newest.tick) {
-      return;  // never twice the same tick
-    }
+    if (world.tick <= newest.tick) return;
   }
   SnapshotSample& sample = m_samples[m_sample_next];
   sample.tick = world.tick;

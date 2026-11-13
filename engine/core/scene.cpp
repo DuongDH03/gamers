@@ -7,6 +7,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "core/file_path.h"
+
 namespace scraps {
 namespace {
 
@@ -618,8 +620,8 @@ bool parse_scene(std::string_view text, Scene& out, std::string& error) {
 }
 
 bool load_scene_file(const std::string& path, Scene& out, std::string& error) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
+  std::ifstream file;
+  if (!open_file_for_reading(path, file)) {
     error = "cannot open scene file '" + path + "'";
     return false;
   }

@@ -53,7 +53,7 @@ scraps_client
 scraps_server
     --scene <name>             scene to host
     --scene-dir <dir>          where .scene files are (default: scenes\ next to the program)
-    --port <n>                 UDP port (default: 7777)
+    --port <n>                 UDP port (default: 7777; 0 = any free one, printed)
     --bind <ip>                interface to listen on (default: all; 127.0.0.1 = this PC only)
     --max-players <n>          1 to 16 (default: 10)
     --snapshot-interval <n>    ticks between snapshots (default: 1)

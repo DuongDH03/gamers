@@ -27,6 +27,7 @@ namespace {
 
 constexpr std::uint32_t kIncrementsPerChunk = 2000000;
 constexpr int kSkipped = 77;  // CTest's "skipped" code (see apps/CMakeLists.txt)
+constexpr int kUnsafeAttempts = 5;  // runs of the plain counter before concluding nothing was lost
 
 }  // namespace
 
@@ -47,14 +48,19 @@ int main(int argc, char** argv) {
   if (unsafe) {
     // volatile stops the compiler from turning the loop into one big addition,
     // so every increment really is LOAD, ADD, STORE in memory.
-    volatile std::uint32_t counter = 0;
-    auto work = [&counter](std::size_t begin, std::size_t end) {
-      for (std::size_t chunk = begin; chunk < end; ++chunk) {
-        for (std::uint32_t i = 0; i < kIncrementsPerChunk; ++i) counter = counter + 1;
-      }
-    };
-    jobs.parallel_for(chunks, 1, work);
-    result = counter;
+    // On a busy machine (other programs, or other tests running in
+    // parallel) the threads may take turns for a whole run and lose
+    // nothing by luck, so it tries a few times before saying so.
+    for (int attempt = 0; attempt < kUnsafeAttempts && (attempt == 0 || result == expected); ++attempt) {
+      volatile std::uint32_t counter = 0;
+      auto work = [&counter](std::size_t begin, std::size_t end) {
+        for (std::size_t chunk = begin; chunk < end; ++chunk) {
+          for (std::uint32_t i = 0; i < kIncrementsPerChunk; ++i) counter = counter + 1;
+        }
+      };
+      jobs.parallel_for(chunks, 1, work);
+      result = counter;
+    }
   } else {
     std::atomic<std::uint32_t> counter{0};
     auto work = [&counter](std::size_t begin, std::size_t end) {

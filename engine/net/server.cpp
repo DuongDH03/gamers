@@ -355,13 +355,15 @@ void Server::reload(World world, std::string scene_name, std::uint32_t scene_has
 }
 
 void Server::load_state(World world, std::string scene_name, std::uint32_t scene_hash) {
-  // The saved tick stays. A client notices the tick going back in the next
-  // full snapshot and restarts its prediction and interpolation from it.
+  // The saved tick stays, earlier or later than the running one. The next
+  // full snapshot carries a new world epoch, and the client restarts its
+  // prediction and interpolation from it.
   replace_world(std::move(world), std::move(scene_name), scene_hash);
 }
 
 void Server::replace_world(World world, std::string scene_name, std::uint32_t scene_hash) {
   m_world = std::move(world);
+  ++m_world_epoch;  // every snapshot from now on says "a new world" (net/protocol.h)
   m_scene_name = std::move(scene_name);
   m_scene_hash = scene_hash;
   for (std::size_t i = 0; i < m_clients.size(); ++i) {
@@ -394,6 +396,7 @@ void Server::send_snapshots() {
       m_delta_bytes.clear();
       ByteWriter writer(m_delta_bytes);
       writer.write_u32(client.acked_snapshot);
+      writer.write_u32(m_world_epoch);
       write_world_delta(writer, *base, m_world);
       send_snapshot(client, m_delta_bytes);
       ++m_delta_snapshots;
@@ -401,6 +404,7 @@ void Server::send_snapshots() {
       if (m_full_bytes.empty()) {  // once per snapshot, shared by every client that needs it
         ByteWriter writer(m_full_bytes);
         writer.write_u32(kFullSnapshot);
+        writer.write_u32(m_world_epoch);
         write_world_state(writer, m_world);
       }
       send_snapshot(client, m_full_bytes);

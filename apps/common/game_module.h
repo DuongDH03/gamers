@@ -37,6 +37,7 @@
 #include "backends/dynlib/library.h"
 #include "core/file_watch.h"
 #include "core/game_api.h"
+#include "core/save.h"
 #include "net/client.h"
 #include "net/server.h"
 #include "views/controls.h"
@@ -84,6 +85,9 @@ inline bool is_valid_utf8(const std::string& text) {
   return true;
 }
 
+// The longest game name accepted: what a save file keeps (core/save.h).
+constexpr std::size_t kMaxGameNameLength = scraps::kMaxSaveNameLength;
+
 // True if `api` can run inside this program. Otherwise `error` says why.
 // The version is read first and alone: if it differs, nothing else in the
 // struct can be trusted to be where this program expects it.
@@ -106,6 +110,17 @@ inline bool check_game_api(const scraps::GameApi* api, std::string& error) {
   if (api->name == nullptr || api->name[0] == '\0') {
     error = "the game has no name";
     return false;
+  }
+  // The name goes into save files (core/save.h keeps at most
+  // kMaxSaveNameLength bytes and reads back printable ASCII only), the
+  // preferences folder and messages: refuse anything else here, so a save
+  // can always be loaded again by the game that wrote it.
+  for (std::size_t i = 0; api->name[i] != '\0'; ++i) {
+    const char c = api->name[i];
+    if (i >= kMaxGameNameLength || c < 0x20 || c > 0x7E) {
+      error = "the game's name must be 1 to " + std::to_string(kMaxGameNameLength) + " printable ASCII characters";
+      return false;
+    }
   }
   if (api->simulate == nullptr) {
     error = "the game has no simulate";
@@ -135,7 +150,7 @@ class GameModule {
  public:
   static constexpr double kCheckInterval = 0.5;  // seconds between looks at the file
   static constexpr int kMaxCopyTries = 6;        // checks a failing copy is retried before giving up
-  static constexpr std::size_t kNameCapacity = 32;
+  static constexpr std::size_t kNameCapacity = kMaxGameNameLength + 1;  // every accepted name fits whole
   static constexpr std::size_t kMaxOtherBuilds = 4;
   static constexpr double kHintQuietSeconds = 10.0;  // at most one "other build" hint this often
 
