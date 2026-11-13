@@ -114,10 +114,7 @@ std::string executable_directory() {
     if (wide.size() >= 32768) return std::string();
     wide.resize(wide.size() * 2);
   }
-  // Back to the folder: drop the file name after the last separator.
-  while (length > 0 && wide[length - 1] != L'\\' && wide[length - 1] != L'/') --length;
-  while (length > 1 && (wide[length - 1] == L'\\' || wide[length - 1] == L'/')) --length;
-  if (length == 0 || length > static_cast<DWORD>(INT_MAX)) return std::string();
+  if (length > static_cast<DWORD>(INT_MAX)) return std::string();
   const int wide_length = static_cast<int>(length);
   // WC_ERR_INVALID_CHARS: a broken name gives "" instead of a mangled path.
   const int size =
@@ -125,16 +122,32 @@ std::string executable_directory() {
   if (size <= 0) return std::string();
   std::string text(static_cast<std::size_t>(size), '\0');
   WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_length, &text[0], size, nullptr, nullptr);
-  for (char& c : text) {
-    if (c == '\\') c = '/';
-  }
-  return text;
+  return directory_of(text);
 #else
   std::error_code error;
   const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", error);
   if (error || exe.empty()) return std::string();
-  return exe.parent_path().generic_string();
+  return directory_of(exe.generic_string());
 #endif
+}
+
+std::string directory_of(const std::string& file_path) {
+  // Drop the file name after the last separator, then any separators before
+  // it ("C:/a//b.exe"), but never the one that makes a root: "C:/app.exe"
+  // is in "C:/", not "C:" (which would make "C:scenes" relative to the
+  // drive's current folder), and "/app" is in "/".
+  std::size_t length = file_path.size();
+  while (length > 0 && file_path[length - 1] != '\\' && file_path[length - 1] != '/') --length;
+  if (length == 0) return std::string();  // no folder in it
+  while (length > 1 && (file_path[length - 2] == '\\' || file_path[length - 2] == '/')) --length;
+  const bool drive_root = length == 3 && file_path[1] == ':';
+  const bool root = length == 1 || drive_root;
+  if (!root) --length;  // the separator after the folder's name
+  std::string folder = file_path.substr(0, length);
+  for (char& c : folder) {
+    if (c == '\\') c = '/';
+  }
+  return folder;
 }
 
 }  // namespace scraps::dynlib

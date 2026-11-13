@@ -9,8 +9,9 @@ The rules every change must follow are in the
 
 ## Quick start
 
-Requirements: CMake 3.21+, and MinGW-w64 GCC or Visual Studio 2022. SDL3 is
-downloaded and built automatically the first time (about 2 minutes).
+Requirements: CMake 3.25+ (the presets and workflows need it), and MinGW-w64
+GCC or Visual Studio 2022. SDL3 is downloaded and built automatically the
+first time (about 2 minutes).
 
 ```bash
 cmake --preset mingw

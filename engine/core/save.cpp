@@ -77,6 +77,7 @@ bool check_save(const std::uint8_t* data, std::size_t size, SaveHeader& header, 
 
   // From here on, running out of bytes means a cut-off file; anything else
   // that does not add up means a damaged one.
+  header.world_format = reader.read_u16();
   const bool game_ok = read_short_string(reader, header.game_name);
   const bool scene_ok = game_ok && read_short_string(reader, header.scene_name);
   header.scene_hash = reader.read_u32();
@@ -106,6 +107,14 @@ bool check_save(const std::uint8_t* data, std::size_t size, SaveHeader& header, 
     error = "the save file is corrupted (checksum mismatch)";
     return false;
   }
+  // Checked after the checksum, so a damaged byte reads as damage, not as a
+  // save from another build.
+  if (header.world_format != kWorldFormatVersion) {
+    error = "the save was made by a build whose world format is version " + std::to_string(header.world_format) +
+            "; this build's is version " + std::to_string(kWorldFormatVersion) +
+            " (saves do not carry over to a build that stores the world differently)";
+    return false;
+  }
   return true;
 }
 
@@ -117,6 +126,7 @@ void write_save(const World& world, std::string_view scene_name, std::uint32_t s
   ByteWriter writer(out);
   writer.write_u32(kSaveMagic);
   writer.write_u16(kSaveFormatVersion);
+  writer.write_u16(kWorldFormatVersion);
   write_short_string(writer, game_name);
   write_short_string(writer, scene_name);
   writer.write_u32(scene_hash);

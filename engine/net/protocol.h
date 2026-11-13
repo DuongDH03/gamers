@@ -25,14 +25,21 @@
 //     │◄─ SnapshotFragment × N (world state, ack of the last input applied)
 //     │── Bye ──────────────────────────────►│
 //
-// A snapshot's payload is `u32 baseline_snapshot` followed by either the full
-// world state (baseline 0, core write_world_state) or the changes since the
-// snapshot with that id (core write_world_delta). The baseline is the newest
-// snapshot the client has said, in an Input, that it holds.
+// A snapshot's payload is `u32 baseline_snapshot`, `u32 world_epoch`, then
+// either the full world state (baseline 0, core write_world_state) or the
+// changes since the snapshot with that id (core write_world_delta). The
+// baseline is the newest snapshot the client has said, in an Input, that it
+// holds. The world epoch goes up each time the server replaces its world
+// (a loaded save, a scene reload): a full snapshot with a new epoch tells
+// the client the world was replaced, not corrected, whether the new tick is
+// earlier or later, so it starts prediction and interpolation over instead
+// of blending from the old world. A delta is only read in its own epoch.
 namespace scraps {
 
 constexpr std::uint32_t kProtocolMagic = 0x50524353u;  // "SCRP" in little-endian bytes
-constexpr std::uint16_t kProtocolVersion = 4;  // 4: challenge cookie in the handshake
+// History: 4 = challenge cookie in the handshake; 5 = world epoch in every
+// snapshot payload.
+constexpr std::uint16_t kProtocolVersion = 5;
 
 constexpr std::size_t kMaxCommandsPerInputFrame = 6;
 constexpr std::size_t kMaxInputFramesPerPacket = 8;

@@ -75,7 +75,15 @@ add_test(NAME no_allocation_in_hot_path COMMAND scraps_alloc_test)
 # A game other than the sandbox (tests/tiny_game): the same client source,
 # built for it through scraps_add_game() and its generated selected_game.h.
 scraps_add_client(scraps_client_tiny tiny)
-add_test(NAME tiny_game_runs COMMAND scraps_client_tiny --headless --frames 120)
+# Release builds compile in no source scenes folder: name it.
+set(tiny_scene_dir_args "")
+if(NOT SCRAPS_HOT_RELOAD)
+  get_property(tiny_scenes GLOBAL PROPERTY SCRAPS_GAME_tiny_SCENES)
+  set(tiny_scene_dir_args --scene-dir "${tiny_scenes}")
+endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tiny_game_work")
+add_test(NAME tiny_game_runs COMMAND scraps_client_tiny --headless --frames 120 ${tiny_scene_dir_args}
+         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tiny_game_work")
 # The HUD text comes from the tiny game's code; its scene from its own folder.
 set_tests_properties(tiny_game_runs PROPERTIES
                      PASS_REGULAR_EXPRESSION "game 'tiny', scenes from [^\n]*tiny_game/scenes.*headless run.*tiny game"

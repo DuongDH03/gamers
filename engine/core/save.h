@@ -16,16 +16,20 @@
 // stored: they come from the scene file, as on every start, and the saved
 // state is laid over the World built from it.
 //
-//   magic "SCRS" u32 | format version u16 | game name | scene name
-//   | scene content hash u32 | tick u32 | state size u32 | state
-//   | checksum u32 (FNV-1a of every byte before it)
+//   magic "SCRS" u32 | format version u16 | world format version u16
+//   | game name | scene name | scene content hash u32 | tick u32
+//   | state size u32 | state | checksum u32 (FNV-1a of every byte before it)
+//
+// The world format version is core's kWorldFormatVersion (core/serialize.h)
+// of the build that wrote the save: the state's bytes mean something only to
+// a build with the same one, so another one is refused with a message.
 //
 // Names are a u8 length and that many bytes. Core only turns bytes into a
 // World and back; where the file lives is the app's choice (Rule 3).
 namespace scraps {
 
 constexpr std::uint32_t kSaveMagic = 0x53524353u;  // "SCRS" in little-endian bytes
-constexpr std::uint16_t kSaveFormatVersion = 1;
+constexpr std::uint16_t kSaveFormatVersion = 2;  // 2: the world format version in the header
 constexpr std::size_t kMaxSaveNameLength = 63;
 // Far above the largest World (kMaxEntities slots of about 85 bytes), so a
 // file bigger than this is not a save, and nothing reads it whole.
@@ -34,6 +38,7 @@ constexpr std::size_t kMaxSaveSize = 64u << 20;
 // What a save says about itself.
 struct SaveHeader {
   std::uint16_t version = 0;
+  std::uint16_t world_format = 0;  // kWorldFormatVersion of the build that wrote it
   std::string game_name;
   std::string scene_name;
   std::uint32_t scene_hash = 0;  // content hash of the scene file when it was saved
@@ -61,7 +66,8 @@ void write_save(const World& world, std::string_view scene_name, std::uint32_t s
 // Reads and checks only the header (and that the file is whole and
 // unchanged), so an app can learn which scene a save needs before it loads
 // that scene. Returns false with a message for a file that is not a save,
-// another format version, a truncated or a corrupted one.
+// another format version, a World written in another byte format (a save
+// from an older or newer build), a truncated or a corrupted one.
 bool read_save_header(const std::uint8_t* data, std::size_t size, SaveHeader& header, std::string& error);
 
 // Lays a save over `world_from_scene`, the World freshly built from the

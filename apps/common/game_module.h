@@ -38,6 +38,7 @@
 #include "backends/dynlib/library.h"
 #include "core/file_watch.h"
 #include "core/game_api.h"
+#include "core/save.h"
 #include "net/client.h"
 #include "net/server.h"
 #include "views/controls.h"
@@ -86,17 +87,23 @@ inline bool is_valid_utf8(const std::string& text) {
 }
 
 // True if `name` can name a UI command (GameUiCommand): 1 to 31 ASCII
-// letters, digits, '_' or '-'.
+// characters, a letter first, then letters, digits or '_'. The React app
+// (ui/src/bridge.ts) accepts exactly these; a name it refused would make it
+// drop the whole view message.
 inline bool is_ui_command_name(const char* name) {
   if (name == nullptr || name[0] == '\0') return false;
   for (std::size_t i = 0; name[i] != '\0'; ++i) {
     if (i + 1 >= scraps::kGameUiCommandNameCapacity) return false;
     const char c = name[i];
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+    const bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    const bool ok = letter || (i > 0 && ((c >= '0' && c <= '9') || c == '_'));
     if (!ok) return false;
   }
   return true;
 }
+
+// The longest game name accepted: what a save file keeps (core/save.h).
+constexpr std::size_t kMaxGameNameLength = scraps::kMaxSaveNameLength;
 
 // True if `api` can run inside this program. Otherwise `error` says why.
 // The version is read first and alone: if it differs, nothing else in the
@@ -120,6 +127,17 @@ inline bool check_game_api(const scraps::GameApi* api, std::string& error) {
   if (api->name == nullptr || api->name[0] == '\0') {
     error = "the game has no name";
     return false;
+  }
+  // The name goes into save files (core/save.h keeps at most
+  // kMaxSaveNameLength bytes and reads back printable ASCII only), the
+  // preferences folder and messages: refuse anything else here, so a save
+  // can always be loaded again by the game that wrote it.
+  for (std::size_t i = 0; api->name[i] != '\0'; ++i) {
+    const char c = api->name[i];
+    if (i >= kMaxGameNameLength || c < 0x20 || c > 0x7E) {
+      error = "the game's name must be 1 to " + std::to_string(kMaxGameNameLength) + " printable ASCII characters";
+      return false;
+    }
   }
   if (api->simulate == nullptr) {
     error = "the game has no simulate";
@@ -168,7 +186,7 @@ class GameModule {
  public:
   static constexpr double kCheckInterval = 0.5;  // seconds between looks at the file
   static constexpr int kMaxCopyTries = 6;        // checks a failing copy is retried before giving up
-  static constexpr std::size_t kNameCapacity = 32;
+  static constexpr std::size_t kNameCapacity = kMaxGameNameLength + 1;  // every accepted name fits whole
   static constexpr std::size_t kMaxOtherBuilds = 4;
   static constexpr double kHintQuietSeconds = 10.0;  // at most one "other build" hint this often
 

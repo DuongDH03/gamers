@@ -3,9 +3,14 @@
 #include <system_error>
 #include <utility>
 
+#include "core/file_path.h"
+
 namespace scraps {
 
-FileWatcher::FileWatcher(std::string path) : m_path(std::move(path)), m_file(m_path) {
+FileWatcher::FileWatcher(std::string path) : m_path(std::move(path)) {
+  // UTF-8, like every path in the engine. A path that is not valid UTF-8
+  // stays empty here: it never exists, so it never changes.
+  utf8_to_path(m_path, m_file);
   m_had_file = read_time(m_last_time);
 }
 

@@ -1065,3 +1065,139 @@ is 10 again.
   list yet.
 - No WebView exists yet, so the protocol has met no real page; agent 7's
   React app was built against 6a at the same time.
+---
+
+## Review fixes, wave 1 (2026-11-14)
+
+The review of parts 1 to 5 said No-Go with two blockers. Each finding, and
+what was done (line numbers as of this commit). No rule was bent. Agent 5
+owns S3 (pause input) and M5 (volume) with the `ClientApp` move, so
+`apps/client/main.cpp` was not touched here.
+
+**Blockers**
+
+- **B1. Non-ASCII install folders.** New `core/file_path.h`:
+  `utf8_to_path` (UTF-8 to `std::filesystem::path` by hand, UTF-16 on
+  Windows, never throws, refuses broken UTF-8 and NUL;
+  `engine/core/file_path.cpp:49`) and `open_file_for_reading`
+  (`file_path.cpp:82`). Every file core opens by name goes through it:
+  `scene.cpp:624`, `image.cpp:41`, `sound.cpp:219`, `music.cpp:170`, and
+  `FileWatcher(std::string)` (`file_watch.cpp:13`). `SpriteBank`,
+  `SoundBank`, `SceneMusic`, `SceneReloader` and the client's scene loading
+  all call those, so they follow. `apps/common/save_game.h:30` uses the same
+  conversion instead of `u8path` (see M4).
+  - Test `views.scene_files_load_from_a_non_ascii_folder`: copies the
+    sandbox scenes into `scenes Phương 模块/` and loads the scene, a PNG,
+    WAV/OGG/MP3 sounds and the music directly and through `SpriteBank`,
+    `SoundBank` and `SceneMusic`; the watcher sees an edit; a path that is
+    not UTF-8 fails cleanly. With the old `ifstream(std::string)` put back
+    (a mutation run, MinGW), every load in it fails.
+  - `package_runs` (`cmake/TestPackageRuns.cmake:56-93`) now runs the
+    installed client and server twice: from the install, then from a copy
+    of it in `package_work/Phương 模块/`, each time checking they took their
+    scenes from that folder.
+  - The tests that used the system temp folder (`core.file_watcher_...`,
+    two `net.` tests) now use the build's own work folder, so two builds'
+    `ctest` runs no longer share files there.
+- **B2. Fixed UDP ports.** `scraps_server --port 0` binds a port the system
+  picks and prints it (`apps/server/main.cpp:116`, `:229-235`). Every server
+  smoke test uses it (`apps/CMakeLists.txt:84-128`), and so does
+  `package_runs`. No test keeps a fixed port, so no `RESOURCE_LOCK` was
+  needed; `server_runs` also checks that the printed port is not 0.
+
+**Should fix**
+
+- **S1. Saves tied to the World's byte format.** `kWorldFormatVersion` is
+  public now (`engine/core/serialize.h:91`). The save header carries it
+  after the save format version, which goes to 2 (`core/save.h`); a
+  mismatch is refused, after the checksum so damage still reads as damage,
+  with "the save was made by a build whose world format is version N; this
+  build's is version M" (`engine/core/save.cpp:112`). Saves of version 1
+  (written before this commit) are refused as another save format. Test
+  `save.other_world_format_is_refused` (one older, one newer).
+- **S2. Forward loads.** The server keeps a world epoch that goes up on
+  every world replacement (`engine/net/server.cpp:366`), and every snapshot
+  payload carries it after the baseline id (`server.cpp:399`, `:407`).
+  **Protocol version 4 → 5** (`engine/net/protocol.h:42`; the payload layout
+  is documented at the top of that file). The client resets interpolation
+  samples and starts prediction over when a full snapshot brings a new
+  epoch, whichever way the tick moved (`engine/net/client.cpp:220-251`); a
+  delta is read only in its own epoch; the old "tick went backwards" guess
+  is gone. New test `save.a_forward_load_starts_prediction_over` (a fresh
+  game loads a save about 300 ticks ahead; checks no blend for the own player and
+  that a second client draws player 0 exactly at the server's position);
+  `save.offline_save_play_load` still covers the backward case. With the
+  epoch check removed, both fail.
+- **S4. Shared save file.** Each client smoke test runs in its own folder,
+  `build/<preset>/apps/smoke/<test>/` (`scraps_add_client_smoke`,
+  `apps/CMakeLists.txt:67-92`); `tiny_game_runs` too.
+
+**Minor**
+
+- **M1.** With `SCRAPS_HOT_RELOAD` off, no source scenes path is compiled in
+  (`cmake/ScrapsGame.cmake:151-158`). `choose_scene_dir` then answers
+  `kNotFound` with the path where `scenes/` should have been
+  (`apps/common/scene_dir.h:20-71`), so the start-up line reads "scenes from
+  C:/x/scenes (not found: no scenes/ next to the executable; give
+  --scene-dir)" and the "cannot open scene file" error names that path. No
+  `main.cpp` change was needed. The smoke tests pass `--scene-dir` in such
+  builds. Test `apps.release_build_says_where_it_looked`.
+- **M2.** `dynlib::directory_of` (`engine/backends/dynlib/library.cpp:134`)
+  keeps a root's separator: `C:\app.exe` gives `C:/`, `/app` gives `/`.
+  Test `apps.directory_of_keeps_a_root`.
+- **M3.** `check_game_api` refuses a game name that is not 1 to 63
+  printable ASCII characters (`apps/common/game_module.h:114-124`), which
+  covers modules and the static game (`use_static`). `GameModule` now keeps
+  all 63 (it cut names at 31). Test `game.game_names_are_checked`.
+- **M4.** `dynlib::utf8_arguments` (`engine/backends/dynlib/command_line.h`)
+  reads the command line with `GetCommandLineW` / `CommandLineToArgvW` and
+  converts it to UTF-8 (falls back to `argv` if that fails or the count
+  differs); `scraps_dynlib` links `shell32`. `scraps_server` parses its
+  options from it (`apps/server/main.cpp:139`), and the save paths are
+  converted without throwing (`save_game.h:30`). Smoke tests
+  `server_save_non_ascii` → `server_load_non_ascii` save to and load from
+  `save_test/Phương 模块/server.sav`; with plain `argv` the save fails
+  ("cannot write .../Phuong ??/server.sav.tmp"). **The client is not wired
+  yet**: one line, `parse_options(dynlib::utf8_arguments(argc, argv), ...)`,
+  after agent 5's `ClientApp` lands.
+- **M6.** `SceneReloader::poll` does nothing while the server is paused
+  (`apps/common/scene_reload.h:42`): the paused game keeps showing the old
+  world with the player in it, and the edit is picked up at the first check
+  after resuming (the file watcher still reports it). Test
+  `pause.a_scene_edit_while_paused_waits_for_resume`; it fails without the
+  check.
+
+**Also**
+
+- The required CMake version is 3.25 (`CMakeLists.txt`, `README.md`),
+  since presets version 6 and workflows need it.
+- `race_demo_plain_loses_updates` failed once in a `ctest -j 8` run beside
+  the other preset's: with every core busy the eight threads took turns and
+  lost nothing. Both race tests are now `RUN_SERIAL`, and the `--unsafe` run
+  tries up to five times before it reports no loss
+  (`apps/race_demo/main.cpp`). The atomic run is unchanged.
+- `cmake/README.txt.in` mentions `--port 0`.
+
+**Results**
+
+140 unit test functions (133 before; 7 new) and 33 CTest tests (31
+before; `server_save_non_ascii` and `server_load_non_ascii` are new).
+
+| | Build | `ctest` | `ctest -j 8`, both presets started together |
+|---|---|---|---|
+| `mingw` | 0 warnings | 33/33 | 33/33 in each of 6 rounds |
+| `msvc` | 0 warnings | 33/33 | 33/33 in each of 6 rounds |
+
+Before the race-demo change, one `msvc` round of the first series failed
+`race_demo_plain_loses_updates` ("lost 0"); every run after it passed.
+The release configuration (`release-mingw`: `SCRAPS_HOT_RELOAD` off) also
+builds with 0 warnings and passes 33/33 with `-j 8`; its `scraps_client.exe`
+holds no `games/sandbox/scenes` path, and its server started from the build
+folder says "scenes from .../apps/scenes (not found: no scenes/ next to the
+executable; give --scene-dir)" and names that path in the error.
+`release-msvc` was not run.
+
+**Not verified:** the SDL client's windowed paths (only headless runs);
+a non-ASCII path on the client's command line (not wired yet, see M4);
+Linux (the non-Windows branches of `utf8_to_path`, `utf8_arguments` and
+`directory_of` were compiled by neither preset).

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)  # presets version 6 and workflow presets need 3.25
 
 project(Scraps VERSION 0.1.0 DESCRIPTION "A small 2D game engine built to learn engine internals" LANGUAGES CXX)
 

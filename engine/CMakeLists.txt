@@ -36,6 +36,7 @@ find_package(Threads REQUIRED)
 
 add_library(scraps_core STATIC
   core/audio_convert.cpp
+  core/file_path.cpp
   core/file_watch.cpp
   core/fixed_step.cpp
   core/image.cpp
@@ -110,11 +111,17 @@ if(WIN32)
 endif()
 scraps_target_defaults(scraps_udp)
 
-# Loads game modules (shared libraries) for hot reload. Apps only.
+# Loads game modules (shared libraries) for hot reload. Apps only. Also the
+# other small OS calls that need windows.h: the executable's folder and the
+# UTF-8 command line (CommandLineToArgvW lives in shell32).
 add_library(scraps_dynlib STATIC
+  backends/dynlib/command_line.cpp
   backends/dynlib/library.cpp)
 target_include_directories(scraps_dynlib PUBLIC ${SCRAPS_ENGINE_DIR})
 target_link_libraries(scraps_dynlib PRIVATE ${CMAKE_DL_LIBS})
+if(WIN32)
+  target_link_libraries(scraps_dynlib PRIVATE shell32)
+endif()
 scraps_target_defaults(scraps_dynlib)
 
 if(SCRAPS_SDL3_TARGET)

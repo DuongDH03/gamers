@@ -32,7 +32,14 @@ struct SceneReloader {
   // Checks the file about twice a second. When it changed, reloads it into
   // `server`. Returns true when something happened; `message` then says what
   // (including parse errors, in which case the running world is kept).
+  //
+  // Not while the server is paused: a reloaded world gets its players back
+  // through joins, which only a tick applies (Rule 1), so a reload during a
+  // pause would show a world without the player until resume. The change
+  // is not lost: the watcher still reports it at the first check after the
+  // game resumes, and until then the old world stays on screen.
   bool poll(double now, scraps::Server& server, std::string& message) {
+    if (server.paused()) return false;
     if (now < next_check) return false;
     next_check = now + 0.5;
     if (!watcher.changed()) return false;

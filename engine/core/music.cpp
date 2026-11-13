@@ -3,6 +3,7 @@
 #include <fstream>
 #include <utility>
 
+#include "core/file_path.h"
 #include "third_party/audio_decoders.h"
 
 namespace scraps {
@@ -165,8 +166,8 @@ std::size_t MusicStream::read(float* stereo, std::size_t frames) {
 
 bool open_music(const std::string& path, MusicStream& out, std::string& error) {
   out.close();
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
+  std::ifstream file;
+  if (!open_file_for_reading(path, file)) {
     error = "cannot open '" + path + "'";
     return false;
   }

@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/file_path.h"
 #include "core/save.h"
 #include "core/scene.h"
 #include "net/server.h"
@@ -24,14 +25,22 @@
 
 namespace scraps_apps {
 
-// Paths are UTF-8 (SDL's preferences folder may hold any character).
-inline std::filesystem::path utf8_path(const std::string& path) { return std::filesystem::u8path(path); }
+// Paths are UTF-8 (SDL's preferences folder may hold any character),
+// converted without throwing: a path that is not valid UTF-8 is an error.
+inline bool save_path(const std::string& path, std::filesystem::path& out, std::string& error) {
+  if (path.empty() || !scraps::utf8_to_path(path, out)) {
+    error = "not a usable file name: '" + path + "'";
+    return false;
+  }
+  return true;
+}
 
 // Writes `bytes` to `path`, creating its folder. Writes a temporary file
 // next to it first and then renames it over the old one, so a crash while
 // saving never leaves a half-written save behind.
 inline bool write_save_file(const std::string& path, const std::vector<std::uint8_t>& bytes, std::string& error) {
-  const std::filesystem::path target = utf8_path(path);
+  std::filesystem::path target;
+  if (!save_path(path, target, error)) return false;
   std::error_code fs_error;
   if (target.has_parent_path()) std::filesystem::create_directories(target.parent_path(), fs_error);
   std::filesystem::path temporary = target;
@@ -60,7 +69,8 @@ inline bool write_save_file(const std::string& path, const std::vector<std::uint
 
 // Reads a whole save file. Files larger than any save are refused unread.
 inline bool read_save_file(const std::string& path, std::vector<std::uint8_t>& bytes, std::string& error) {
-  const std::filesystem::path source = utf8_path(path);
+  std::filesystem::path source;
+  if (!save_path(path, source, error)) return false;
   std::error_code fs_error;
   const std::uintmax_t size = std::filesystem::file_size(source, fs_error);
   if (fs_error) {

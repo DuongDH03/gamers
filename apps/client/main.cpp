@@ -20,7 +20,9 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
+#include "backends/dynlib/command_line.h"
 #include "backends/dynlib/library.h"
 #include "backends/headless/headless_backend.h"
 #if SCRAPS_HAS_SDL3
@@ -184,8 +186,13 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
 }  // namespace
 
 int main(int argc, char** argv) {
+  // UTF-8 arguments (dynlib::utf8_arguments), so --scene-dir may name any folder.
+  std::vector<std::string> args = dynlib::utf8_arguments(argc, argv);
+  std::vector<char*> arg_pointers;
+  for (std::string& arg : args) arg_pointers.push_back(arg.data());
+  arg_pointers.push_back(nullptr);
   Options options;
-  if (!parse_options(argc, argv, options)) {
+  if (!parse_options(static_cast<int>(args.size()), arg_pointers.data(), options)) {
     print_usage();
     return 2;
   }

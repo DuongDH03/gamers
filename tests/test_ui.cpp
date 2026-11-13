@@ -408,7 +408,7 @@ void ui_commands_are_checked_and_copied(test::Context& ctx) {
   CHECK(check_game_api(&api, error));
   CHECK(api.ui_command_count == 1 && std::string(api.ui_commands[0].name) == "drop_coin");
 
-  const GameUiCommand good[] = {{"drop_coin", sandbox::kDropCoin}, {"Jump-2", CommandType::kJump}};
+  const GameUiCommand good[] = {{"drop_coin", sandbox::kDropCoin}, {"Jump_2", CommandType::kJump}};
   api.ui_commands = good;
   api.ui_command_count = 2;
   CHECK(check_game_api(&api, error));
@@ -419,6 +419,8 @@ void ui_commands_are_checked_and_copied(test::Context& ctx) {
       {{"", sandbox::kDropCoin}, {"b", CommandType::kJump}},
       {{nullptr, sandbox::kDropCoin}, {"b", CommandType::kJump}},
       {{"has space", sandbox::kDropCoin}, {"b", CommandType::kJump}},
+      {{"Jump-2", sandbox::kDropCoin}, {"b", CommandType::kJump}},  // the React app refuses '-'
+      {{"2jump", sandbox::kDropCoin}, {"b", CommandType::kJump}},   // and a digit first
       {{"quote\"", sandbox::kDropCoin}, {"b", CommandType::kJump}},
       {{"\xC3\xA9", sandbox::kDropCoin}, {"b", CommandType::kJump}},
       {{too_long.c_str(), sandbox::kDropCoin}, {"b", CommandType::kJump}},

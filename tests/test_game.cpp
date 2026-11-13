@@ -27,6 +27,7 @@
 #include "core/scene.h"
 #include "core/serialize.h"
 #include "core/jobs.h"
+#include "core/save.h"
 #include "harness.h"
 #include "marker_game.h"
 #include "net/client.h"
@@ -256,6 +257,47 @@ void gamepad_bindings_are_checked_and_installed(test::Context& ctx) {
   int drops = 0;
   for (const Command& command : out) drops += command.type == sandbox::kDropCoin ? 1 : 0;
   CHECK(drops == 1);
+}
+
+// A game's name goes into its save files, which keep at most 63 bytes of
+// printable ASCII (core/save.h): any other name is refused up front, for a
+// module and for the game linked in (use_static), and the longest accepted
+// one comes back whole.
+void game_names_are_checked(test::Context& ctx) {
+  auto api_named = [](const char* name) {
+    GameApi api = *sandbox::game_api();
+    api.name = name;
+    return api;
+  };
+  const std::string longest(scraps_apps::kMaxGameNameLength, 'g');
+  const std::string too_long(scraps_apps::kMaxGameNameLength + 1, 'g');
+  std::string error;
+  for (const char* good : {"sandbox", "My Game 2: the return!", "~", longest.c_str()}) {
+    GameApi api = api_named(good);
+    error.clear();
+    CHECK(check_game_api(&api, error));
+    GameModule game;
+    CHECK(game.use_static(&api, error));
+    CHECK(std::string(game.name()) == good);
+  }
+  for (const char* bad : {"", "tab\there", "new\nline", "caf\xc3\xa9", "del\x7f", too_long.c_str()}) {
+    GameApi api = api_named(bad);
+    error.clear();
+    CHECK(!check_game_api(&api, error));
+    CHECK(!error.empty());
+    GameModule game;
+    CHECK(!game.use_static(&api, error));
+  }
+  GameApi unnamed = api_named(nullptr);
+  CHECK(!check_game_api(&unnamed, error));
+
+  // What a save written under the longest name reads back: the same name.
+  const World world;
+  std::vector<std::uint8_t> bytes;
+  write_save(world, "top-down", 0x1234u, longest, bytes);
+  SaveHeader header;
+  CHECK(read_save_header(bytes.data(), bytes.size(), header, error));
+  CHECK(header.game_name == longest);
 }
 
 void sound_event_names_are_copies(test::Context& ctx) {
@@ -665,6 +707,7 @@ void reload_waits_for_a_stable_file(test::Context& ctx) {
 void register_game_tests(test::Registry& registry) {
   registry.add("game.static_api_describes_the_sandbox", static_api_describes_the_sandbox);
   registry.add("game.gamepad_bindings_are_checked_and_installed", gamepad_bindings_are_checked_and_installed);
+  registry.add("game.game_names_are_checked", game_names_are_checked);
   registry.add("game.sound_event_names_are_copies", sound_event_names_are_copies);
   registry.add("game.module_matches_static", module_matches_static);
   registry.add("game.swap_keeps_the_world", swap_keeps_the_world);

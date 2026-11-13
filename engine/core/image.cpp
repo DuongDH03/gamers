@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iterator>
 
+#include "core/file_path.h"
 #include "third_party/stb/stb_image.h"
 
 namespace scraps {
@@ -36,8 +37,8 @@ bool decode_png(const std::uint8_t* data, std::size_t size, Image& out, std::str
 }
 
 bool load_png(const std::string& path, Image& out, std::string& error) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
+  std::ifstream file;
+  if (!open_file_for_reading(path, file)) {
     error = "cannot open image '" + path + "'";
     return false;
   }

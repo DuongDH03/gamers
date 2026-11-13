@@ -148,7 +148,14 @@ function(scraps_add_game name)
       "SCRAPS_GAME_BUILD_COMMAND=\"\""
       "SCRAPS_GAME_MODULE_OTHER_BUILDS=\"\"")
   endif()
-  target_compile_definitions(scraps_${name}_app PRIVATE "SCRAPS_GAME_SOURCE_SCENE_DIR=\"${scene_dir}\"")
+  # The source scenes folder is the development fallback only: a release exe
+  # (SCRAPS_HOT_RELOAD off) does not carry the developer's absolute path, and
+  # finds its scenes next to itself or through --scene-dir.
+  if(SCRAPS_HOT_RELOAD)
+    target_compile_definitions(scraps_${name}_app PRIVATE "SCRAPS_GAME_SOURCE_SCENE_DIR=\"${scene_dir}\"")
+  else()
+    target_compile_definitions(scraps_${name}_app PRIVATE "SCRAPS_GAME_SOURCE_SCENE_DIR=\"\"")
+  endif()
 
   # Remembered for the selection and the install rules (ScrapsPackage.cmake).
   set_property(GLOBAL APPEND PROPERTY SCRAPS_GAMES ${name})

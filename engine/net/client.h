@@ -128,7 +128,8 @@ class Client {
   void send_inputs();
   void send_hello(double now);
   void record_sample();
-  enum class SnapshotRead : std::uint8_t { kOk, kNoBaseline, kCorrupt };
+  // kReplaced: read, and the server's world was replaced since (a new epoch).
+  enum class SnapshotRead : std::uint8_t { kOk, kReplaced, kNoBaseline, kCorrupt };
   SnapshotRead read_snapshot(const std::uint8_t* data, std::size_t size);
   void keep_snapshot(std::uint32_t snapshot_id);
   bool sample_position(EntityId id, double tick, Vec3& out) const;
@@ -181,9 +182,13 @@ class Client {
   std::uint64_t m_delta_snapshots = 0;
   std::uint64_t m_missing_baselines = 0;
   bool m_snapshot_pending = false;  // m_authoritative holds a snapshot not yet reconciled
-  // The server replaced its world with one from an earlier tick (a loaded
-  // save): the next reconcile starts prediction over instead of blending.
+  // The server replaced its world (a loaded save, at an earlier or a later
+  // tick): the next reconcile starts prediction over instead of blending.
   bool m_world_replaced = false;
+  // The server's world epoch from the last full snapshot (net/protocol.h);
+  // m_has_epoch is false until the first one after a Welcome.
+  std::uint32_t m_world_epoch = 0;
+  bool m_has_epoch = false;
   bool m_paused = false;
   bool m_restart_timeout = false;  // set on resume: the paused time never counts as silence
   std::uint32_t m_snapshot_ack = 0;

@@ -400,7 +400,10 @@ bool ClientApp::start(std::string& error) {
   if (s.session.server) {
     s.quick_save_path = save_directory(s.options, s.session.game.name()) + "quick.sav";
     std::error_code exists_error;
-    s.has_save = std::filesystem::exists(utf8_path(s.quick_save_path), exists_error);
+    std::filesystem::path quick_save;
+    std::string path_error;
+    s.has_save = save_path(s.quick_save_path, quick_save, path_error) &&
+                 std::filesystem::exists(quick_save, exists_error);
   }
   s.ui_present = s.platform.ui != nullptr && s.platform.ui->present();
   s.ui = std::make_unique<UiModel>(s.pause, !s.session.server, s.ui_present);

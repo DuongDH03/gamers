@@ -10,7 +10,6 @@ namespace scraps {
 namespace {
 
 constexpr std::uint32_t kWorldMagic = 0x57524353u;  // "SCRW" in little-endian bytes
-constexpr std::uint16_t kWorldFormatVersion = 4;  // 3: sky, sounds, entity facing; 4: music
 
 // Limits for values read from untrusted bytes. Looser than what the engine
 // produces (kWorldExtent, scene limits), so valid worlds always pass.
