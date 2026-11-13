@@ -13,6 +13,7 @@ enum class Key : std::uint8_t {
   kMinus, kEquals,
   k1, k2, k3,
   kF1, kF2, kF3,
+  kP, kF5, kF9,
   kCount
 };
 

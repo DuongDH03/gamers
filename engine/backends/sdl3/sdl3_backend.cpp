@@ -38,6 +38,9 @@ SDL_Scancode to_scancode(Key key) {
     case Key::kF1: return SDL_SCANCODE_F1;
     case Key::kF2: return SDL_SCANCODE_F2;
     case Key::kF3: return SDL_SCANCODE_F3;
+    case Key::kP: return SDL_SCANCODE_P;
+    case Key::kF5: return SDL_SCANCODE_F5;
+    case Key::kF9: return SDL_SCANCODE_F9;
     default: return SDL_SCANCODE_UNKNOWN;
   }
 }
