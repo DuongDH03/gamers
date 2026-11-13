@@ -254,6 +254,60 @@ today.
 
 The window itself is checked by hand by you.
 
+### 6a. How wave 2 is split (decided when building, 2026-11-14)
+
+Three agents, so the C++ and the React work can run at the same time:
+
+- **Agent 5, engine prerequisites (C++).**
+  - The `Input` event list and text input.
+  - `ClientApp::frame(now)`: the client loop moved out of `main` into
+    `apps/client/client_app.{h,cpp}`. The sdl3 client keeps working through it.
+  - A platform interface `platform/ui.h` (`UiHost`) with a headless
+    implementation for tests.
+  - The app-side logic that builds the view model and handles actions, in
+    `apps/common/ui_model.h`.
+  - `GameApi` version 3 with named UI commands.
+- **Agent 7, React app (TypeScript), in parallel with agent 5.**
+  - `ui/` with Vite + React + TypeScript and the four screens.
+  - A mock bridge, so it runs in a normal browser with `npm run dev`.
+  - Unit tests with Vitest.
+- **Agent 6, the WebView2 backend and app, after both.**
+  - `engine/backends/webview2/` and the new `scraps_web` executable.
+  - The WebGL renderer, input forwarding, and loading `ui/dist`.
+
+**The bridge protocol (JSON messages).** It is the same in every build;
+only the transport differs. In WebView2, native posts with
+`PostWebMessageAsJson` and the page posts with
+`window.chrome.webview.postMessage`.
+
+Native → UI, sent when something changed (not every frame):
+
+```json
+{ "type": "view",
+  "screen": "main" | "playing" | "paused" | "settings",
+  "game": "sandbox", "hud": "coins 3", "paused": false,
+  "has_save": true, "online": false,
+  "music_volume": 0.8, "effects_volume": 1.0,
+  "notice": "saved", "commands": ["drop_coin"] }
+```
+
+UI → native:
+
+```json
+{ "type": "action", "name": "play" | "continue" | "quit" | "pause" | "resume" |
+  "save" | "load" | "open_settings" | "close_settings" |
+  "set_music_volume" | "set_effects_volume" | "command",
+  "value": 0.5, "command": "drop_coin" }
+```
+
+- `command` actions name a game command from `GameApi::ui_commands`
+  (version 3: `{name, CommandType}` pairs; the sandbox's is `drop_coin`).
+  The app turns them into a `Command` at the next tick (Rule 1).
+- Every other action is an app action: save, load, pause, quit and volumes.
+- Unknown or malformed messages are ignored and counted, never trusted.
+- "Playing" means the game has the keyboard and mouse. In the other screens
+  the UI does, and Esc opens or closes the pause menu.
+
 ---
 
 ## Rules check
