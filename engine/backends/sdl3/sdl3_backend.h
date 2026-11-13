@@ -94,4 +94,10 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   std::vector<SDL_Texture*> m_textures;  // index = TextureId - 1; nullptr once destroyed
 };
 
+// The user's own folder for this program's files, such as saves, from
+// SDL_GetPrefPath: on Windows %APPDATA%\<organization>\<application>\.
+// SDL creates it if needed. UTF-8, ending in a path separator; empty if SDL
+// cannot tell. Works without a window.
+std::string preferences_path(const char* organization, const char* application);
+
 }  // namespace scraps::sdl3

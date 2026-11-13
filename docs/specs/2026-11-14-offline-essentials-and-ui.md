@@ -284,3 +284,91 @@ localisation.
 4. Push target: commit each part, then push to `origin/main`
    (`github.com/DuongDH03/gamers`) when everything is done. Or would you
    rather have a branch and a pull request?
+
+---
+
+## Results, parts 1 and 4
+
+Built 2026-11-14 on branch `worktree-agent-a7919aa9ccb12285f` (agent 1).
+`mingw` and `msvc` both build with zero warnings, and `ctest` passes 28 of 28
+on both (114 unit test functions, 16 of them new).
+
+**What was built**
+- `core/save.h`: `write_save`, `read_save_header`, `read_save`. Format:
+  magic `SCRS`, version 1, game name, scene name, scene hash, tick, the state
+  size, the state (`write_world_state`), and an FNV-1a checksum of
+  everything before it. `read_save` lays the state over the World built from
+  the scene, and returns `kRefused` (with a message, World untouched),
+  `kLoaded`, or `kSceneChanged` (loaded, warn).
+- `Server`: `world()` (it already existed, read-only), `scene_name()`,
+  `scene_hash()`, `load_state(World, scene name, hash)`, `set_paused`.
+  `reload` and `load_state` share one private `replace_world`.
+- `Client::set_paused`. `FixedStepClock::reset()`.
+- `apps/common/save_game.h` (file I/O: write to `.tmp`, then rename) and
+  `apps/common/pause.h` (`OfflinePause`: the one place that pauses; it
+  refuses online). `sdl3::preferences_path` wraps `SDL_GetPrefPath`.
+- `scraps_client`: F5 and F9 (offline) use `quick.sav` in
+  `SDL_GetPrefPath("Scraps", <game>)`, or in `./saves/` when headless; P pauses
+  (offline); HUD messages for saved, loaded, errors and the changed-scene
+  warning, and a centred "Paused - P to resume". `// TODO(merge): duck music`
+  marks where part 2's mixer ducks.
+- `scraps_server --load <file>` (the save's scene unless `--scene` is
+  given) and `--save <file>` (after the loop ends).
+
+**Tests.**
+- `unit_save`:
+  - format: a byte-for-byte round trip; the header; every truncation refused;
+    every single-byte corruption refused; another version, scene or game
+    refused; a changed scene loads with a warning.
+  - offline: play, save, play on, load, and the World equals the save, tick
+    included; prediction restarts after a load over 50 ms latency; saved
+    players who are not here are removed; a refused load changes nothing.
+- `unit_pause`: 10 simulated seconds with no ticks, no snapshots, no inputs and
+  no disconnect (also with the server polled while paused); byte-identical to a
+  run that never paused; no burst after resuming (50 Hz frames, and a 3 s stall
+  while paused); `reset()`; online, the client ignores pause.
+- Smoke tests:
+  - `server_save` → `server_load`: tick 30 saved, world tick 60 after 30 more.
+  - `client_offline_save_pause_load`: the headless autopilot presses F5, P, P,
+    F9 and prints "saves 1, loads 1, save errors 0, paused frames 60, ticks
+    while paused 0".
+- `no_allocation_in_hot_path` also pauses an offline game for 600 frames and
+  resumes it: 0 allocations.
+- Mutation check: with the server's timeout freeze or the client's "world
+  replaced" handling turned off, `pause.ten_seconds_...` and
+  `save.offline_save_play_load` fail.
+
+**Deviations, and why**
+- **`load_state` takes the scene name and hash too**, like `reload`. The
+  World is built from the scene file as it is now. If that file changed after
+  the server loaded it, clients must be told the new hash, or they would
+  refuse it.
+- **A load keeps the saved tick** (reload keeps the running one), so the
+  World equals the saved one. The client ignores the Welcome (same scene).
+  It notices the load in the next full snapshot, whose tick is lower than the
+  newest one it has. That only happens after a load, because snapshots
+  complete in order. The client then clears its interpolation samples and
+  starts prediction over without blending. No protocol change.
+- **Saved players who are not playing now are removed at the next tick.**
+  Players who are playing keep their saved entity (a join of a player who
+  already has one changes nothing). Rejoining players can't be matched to
+  saved ones yet, so after `--load` a dedicated server keeps no players.
+- **A save from another game is refused too**, not only one for another scene.
+- **A checksum** was added to the header, so corruption is always caught,
+  not only when the state happens to fail validation.
+- **F9 resumes a paused game**, so the loaded world shows at once.
+- **The headless autopilot now presses F5 (frame 240), P (frames 270 and 330)
+  and F9 (frame 420)** in every offline smoke run of 600 frames. Those runs
+  write `saves/quick.sav` in their working folder (the `apps` build folder).
+  The dedicated test runs in a folder of its own. Under `ctest -j` the other
+  smoke runs could read each other's save; they don't fail on that, and only
+  the dedicated test checks the counts.
+
+**Not done, or not verified**
+- The SDL path (`%APPDATA%\Scraps\sandbox\quick.sav`) and the HUD text were
+  not seen in a window; only the headless path ran.
+- `--save` runs only when the loop ends (`--ticks`). Ctrl+C stops the server
+  without saving. Catching Ctrl+C needs a signal flag, which is global state,
+  so that is the owner's call.
+- No music ducking and no gamepad start button (parts 2 and 3; see the merge
+  TODO).

@@ -42,6 +42,7 @@ add_library(scraps_core STATIC
   core/level.cpp
   core/mixer.cpp
   core/movement.cpp
+  core/save.cpp
   core/scene.cpp
   core/serialize.cpp
   core/simulate.cpp

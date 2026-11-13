@@ -69,6 +69,11 @@ void Client::poll(double now) {
     send_hello(now);
   }
 
+  if (m_paused || m_restart_timeout) {
+    // Frozen while paused: the paused server sends no snapshots.
+    m_last_heard = now;
+    m_restart_timeout = false;
+  }
   if (now - m_last_heard > m_config.timeout_seconds) {
     m_state = ClientState::kTimedOut;
     m_error = "no answer from the server at " + to_string(m_server);
@@ -174,6 +179,7 @@ bool Client::load_world(const WelcomeMessage& welcome) {
   }
   m_acked_snapshot = kFullSnapshot;
   m_snapshot_pending = false;
+  m_world_replaced = false;
   m_sample_count = 0;
   m_sample_next = 0;
   m_has_world = true;
@@ -251,7 +257,15 @@ void Client::record_sample() {
   const World& world = m_authoritative;
   if (m_sample_count > 0) {
     const SnapshotSample& newest = m_samples[(m_sample_next + kSampleCount - 1) % kSampleCount];
-    if (world.tick <= newest.tick) return;  // never out of order
+    if (world.tick < newest.tick) {
+      // Snapshots complete in order, so an earlier tick means the server
+      // loaded a save: the samples belong to a world that is gone.
+      m_sample_count = 0;
+      m_sample_next = 0;
+      m_world_replaced = true;
+    } else if (world.tick == newest.tick) {
+      return;  // never twice the same tick
+    }
   }
   SnapshotSample& sample = m_samples[m_sample_next];
   sample.tick = world.tick;
@@ -357,10 +371,20 @@ void Client::reconcile(double now) {
     if (entry.frame.sequence != sequence) continue;  // older than the history window
     m_simulate(m_current, entry.frame.commands, m_current.tick + 1, m_config.jobs);
   }
+  if (m_world_replaced) {
+    // A loaded save is a jump, not a correction: nothing to blend from.
+    m_world_replaced = false;
+    m_previous = m_current;
+  }
+}
+
+void Client::set_paused(bool paused) {
+  if (m_paused && !paused) m_restart_timeout = true;
+  m_paused = paused;
 }
 
 void Client::tick(const CommandList& commands, double now) {
-  if (m_state != ClientState::kConnected) return;
+  if (m_state != ClientState::kConnected || m_paused) return;
 
   const std::uint32_t sequence = m_next_sequence++;
   HistoryEntry& entry = m_history[sequence % kHistorySize];

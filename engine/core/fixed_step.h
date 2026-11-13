@@ -20,6 +20,11 @@ class FixedStepClock {
   // freezing in a "spiral of death".
   int advance(double frame_seconds);
 
+  // Forgets the time not yet turned into ticks. Called when the game resumes
+  // from a pause, so the paused time is never caught up in a burst of ticks
+  // (Rule 2: a pause stops ticks, it never adds faster or slower ones).
+  void reset() { m_accumulator = 0.0; }
+
   // How far the render time is between the last tick and the next, in [0, 1).
   float alpha() const;
   double step_seconds() const { return m_step; }

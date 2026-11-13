@@ -6,7 +6,8 @@ add_executable(scraps_tests
   test_net.cpp
   test_sandbox.cpp
   test_udp.cpp
-  test_game.cpp)
+  test_game.cpp
+  test_save.cpp)
 # test_game.cpp tests the apps' hot reload (apps/common/game_module.h).
 target_include_directories(scraps_tests PRIVATE ${PROJECT_SOURCE_DIR}/apps)
 target_link_libraries(scraps_tests PRIVATE scraps_net scraps_views scraps_headless scraps_udp scraps_dynlib scraps_sandbox)
@@ -47,7 +48,7 @@ target_compile_definitions(scraps_tests PRIVATE
   "SCRAPS_SANDBOX_MODULE_FILE=\"$<TARGET_FILE:scraps_sandbox_module>\""
   "SCRAPS_TEST_WORK_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/game_work\"")
 
-foreach(group core scene views platform controls net sandbox udp game)
+foreach(group core scene views platform controls net sandbox udp game save pause)
   add_test(NAME unit_${group} COMMAND scraps_tests ${group}.)
 endforeach()
 

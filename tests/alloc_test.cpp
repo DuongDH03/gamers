@@ -19,10 +19,16 @@
 
 #include "backends/headless/headless_backend.h"
 #include "common/game_module.h"
+#include "common/pause.h"
+#include "core/fixed_step.h"
 #include "core/jobs.h"
 #include "core/mixer.h"
 #include "core/scene.h"
 #include "core/serialize.h"
+#include "net/client.h"
+#include "net/cookie.h"
+#include "net/loopback.h"
+#include "net/server.h"
 #include "sandbox/sandbox.h"
 #include "views/controls.h"
 #include "views/sprite_bank.h"
@@ -200,6 +206,68 @@ int main() {
       allocations, static_cast<unsigned long>(count_alive(world)), static_cast<double>(pick_sum), hud_length);
   if (bad_deltas != 0) {
     std::printf("FAILED: %ld deltas did not decode\n", bad_deltas);
+    return 1;
+  }
+
+  // Pause (docs/specs/2026-11-14-offline-essentials-and-ui.md, part 4): an
+  // offline game paused, ten seconds of paused frames in which both sides
+  // poll and nothing ticks, then resumed, allocates nothing.
+  long pause_allocations = 0;
+  {
+    Scene small;
+    if (!load_scene(SCRAPS_SANDBOX_SCENE_DIR, "top-down", small, error)) {
+      std::printf("FAILED: %s\n", error.c_str());
+      return 1;
+    }
+    LoopbackHub hub;
+    LoopbackNet server_net(hub, std::uint16_t{1});
+    LoopbackNet client_net(hub, std::uint16_t{2});
+    ServerConfig server_config;
+    server_config.cookie_secret = CookieSecret{0x0123456789ABCDEFull, 0x1122334455667788ull};
+    Server server(server_net, make_world(small, movement_rules_for(small.level.perspective)), &sandbox::simulate,
+                  small.name, small.content_hash, server_config);
+    ClientConfig client_config;
+    client_config.scene_directory = SCRAPS_SANDBOX_SCENE_DIR;
+    Client player(client_net, server_net.local_address(), &sandbox::simulate, client_config);
+    FixedStepClock clock;
+    scraps_apps::OfflinePause pause;
+    double t = 0.0;
+    const CommandList no_commands;
+    auto frame = [&]() {  // the client app's loop, offline
+      t += 1.0 / 60.0;
+      hub.set_now(t);
+      player.poll(t);
+      const int steps = pause.advance(clock, 1.0 / 60.0);
+      for (int s = 0; s < steps; ++s) {
+        player.tick(no_commands, t);
+        server.poll(t);
+        server.tick();
+        player.poll(t);
+      }
+    };
+    for (int i = 0; i < 120; ++i) frame();
+    if (find_entity(player.current_world(), player.local_entity()) == nullptr) {
+      std::printf("FAILED: the offline player never appeared\n");
+      return 1;
+    }
+    const long before_pause = g_allocations.load();
+    pause.set(true, &server, player, clock);
+    for (int i = 0; i < 600; ++i) {
+      frame();
+      server.poll(t);
+    }
+    pause.set(false, &server, player, clock);
+    server.poll(t);
+    player.poll(t);
+    pause_allocations = g_allocations.load() - before_pause;
+    std::printf("%ld allocations while pausing, 600 paused frames and resuming\n", pause_allocations);
+    if (player.state() != ClientState::kConnected || server.client_count() != 1) {
+      std::printf("FAILED: the paused player was disconnected\n");
+      return 1;
+    }
+  }
+  if (pause_allocations != 0) {
+    std::printf("FAILED: pausing allocates\n");
     return 1;
   }
   if (allocations != 0) {
