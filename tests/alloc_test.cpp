@@ -21,6 +21,7 @@
 #include "common/game_module.h"
 #include "core/jobs.h"
 #include "core/mixer.h"
+#include "core/music.h"
 #include "core/scene.h"
 #include "core/serialize.h"
 #include "sandbox/sandbox.h"
@@ -93,6 +94,23 @@ int main() {
   const SoundId beep_id = mixer.add(beep);
   std::vector<float> mixed(800 * kSoundChannels);
 
+  // Music: streams opened at load time (that allocates), then started,
+  // crossfaded, looped, ducked and stopped while mixing (that must not).
+  // The short ones wrap many times, so every decoder's rewind runs too.
+  const std::string audio_dir = SCRAPS_TEST_AUDIO_DIR;
+  const std::string music_files[] = {std::string(SCRAPS_SANDBOX_SCENE_DIR) + "/sounds/music.ogg",
+                                     audio_dir + "/loop48.ogg", audio_dir + "/loop48.mp3",
+                                     audio_dir + "/loop48.flac", audio_dir + "/tone_s16.wav"};
+  std::array<MusicStream, 5> tracks;
+  for (std::size_t i = 0; i < tracks.size(); ++i) {
+    if (!open_music(music_files[i], tracks[i], error)) {
+      std::printf("FAILED: %s\n", error.c_str());
+      return 1;
+    }
+  }
+  std::size_t next_track = 0;
+  mixer.play_music(std::move(tracks[next_track++]), 0.8f, 0.5);
+
   // Mouse: a pointer that moves every frame and clicks now and then, sampled
   // and picked through every view like the client does.
   headless::HeadlessBackend input_backend;
@@ -158,6 +176,10 @@ int main() {
       copy_state(client, client_kept[newest]);
 
       if (t % 30 == 0) mixer.play(beep_id, 0.5f);
+      if (t % 60 == 30 && next_track < tracks.size()) mixer.play_music(std::move(tracks[next_track++]), 0.7f, 0.25);
+      if (t == 100) mixer.set_music_gain(0.4f);  // a pause ducks the music
+      if (t == 200) mixer.set_music_gain(1.0f);
+      if (t == 280) mixer.stop_music(0.1);
       mixer.mix(mixed.data(), 800);
       input.move_pointer(400.0f + static_cast<float>(t % 50), 300.0f);
       if (t % 10 == 0) {
@@ -194,7 +216,8 @@ int main() {
   const long allocations = g_allocations.load() - before;
 
   std::printf(
-      "%ld allocations in 300 ticks of threaded simulate + world copy + delta encode/decode + mixing + mouse sampling "
+      "%ld allocations in 300 ticks of threaded simulate + world copy + delta encode/decode + mixing with streamed "
+      "music + mouse sampling "
       "and picking + hot game module polling, HUD and sounds + 3 textured view draws with shadows (%lu entities, "
       "pick sum %.1f, HUD %ld)\n",
       allocations, static_cast<unsigned long>(count_alive(world)), static_cast<double>(pick_sum), hud_length);

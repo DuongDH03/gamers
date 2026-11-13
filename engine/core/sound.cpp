@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iterator>
 
+#include "core/audio_convert.h"
 #include "third_party/audio_decoders.h"
 
 namespace scraps {
@@ -42,60 +43,12 @@ bool mpeg_sync(const std::uint8_t* data, std::size_t size, std::size_t at, bool&
   return true;
 }
 
-// How much of each input channel goes to the left and right output, by
-// channel count, for the usual WAV/FLAC channel order (the decoders hand
-// every format over in that order):
-//   3: FL FR FC   4: FL FR BL BR   5: FL FR FC BL BR   6: FL FR FC LFE BL BR
-//   7: FL FR FC LFE BC SL SR       8: FL FR FC LFE BL BR SL SR
-// Centre and surround channels go to both sides at -3 dB, LFE is left out,
-// and each side is scaled so that the same signal in every channel keeps its
-// level (and nothing can clip).
-struct Downmix {
-  float left[8] = {};
-  float right[8] = {};
-};
-
-Downmix downmix_for(std::size_t channels) {
-  constexpr float c = 0.70710678f;
-  Downmix d;
-  auto set = [&d](std::size_t ch, float l, float r) {
-    d.left[ch] = l;
-    d.right[ch] = r;
-  };
-  switch (channels) {
-    case 1: set(0, 1.0f, 1.0f); break;
-    case 2: set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); break;
-    case 3: set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); set(2, c, c); break;
-    case 4: set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); set(2, c, 0.0f); set(3, 0.0f, c); break;
-    case 5: set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); set(2, c, c); set(3, c, 0.0f); set(4, 0.0f, c); break;
-    case 6: set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); set(2, c, c); set(4, c, 0.0f); set(5, 0.0f, c); break;
-    case 7:
-      set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); set(2, c, c); set(4, 0.5f, 0.5f); set(5, c, 0.0f); set(6, 0.0f, c);
-      break;
-    default:  // 8
-      set(0, 1.0f, 0.0f); set(1, 0.0f, 1.0f); set(2, c, c); set(4, c, 0.0f); set(5, 0.0f, c);
-      set(6, c, 0.0f); set(7, 0.0f, c);
-      break;
-  }
-  float sum_left = 0.0f;
-  float sum_right = 0.0f;
-  for (std::size_t ch = 0; ch < channels && ch < 8; ++ch) {
-    sum_left += d.left[ch];
-    sum_right += d.right[ch];
-  }
-  for (std::size_t ch = 0; ch < 8; ++ch) {
-    if (sum_left > 0.0f) d.left[ch] /= sum_left;
-    if (sum_right > 0.0f) d.right[ch] /= sum_right;
-  }
-  return d;
-}
-
 // Turns a decoder's stream into a SoundData as it arrives: each frame is
-// mixed down to stereo (downmix_for) and resampled to 48 kHz on the fly
-// (linear interpolation: good enough for effects). Only the finished
-// samples are kept, and decoding stops the moment a sound passes 30
-// seconds, so memory never depends on what a file claims or contains: at
-// most 30 s x 48 kHz x 2 floats (11.5 MB).
+// mixed down to stereo and resampled to 48 kHz on the fly (core/audio_convert.h,
+// the same conversion music streams use). Only the finished samples are
+// kept, and decoding stops the moment a sound passes 30 seconds, so memory
+// never depends on what a file claims or contains: at most 30 s x 48 kHz x
+// 2 floats (11.5 MB).
 class Builder {
  public:
   explicit Builder(SoundData& out) : m_out(out) {}
@@ -112,10 +65,11 @@ class Builder {
 
   // Emits the output frames between the last source frame and the end.
   void finish() {
-    if (m_seen == 0) return;
-    while (m_next < static_cast<double>(m_seen)) {
-      emit(m_prev[0], m_prev[1]);
-      m_next += m_step;
+    float left = 0.0f;
+    float right = 0.0f;
+    while (m_resampler.tail_ready()) {
+      m_resampler.pop_tail(left, right);
+      emit(left, right);
     }
   }
 
@@ -125,14 +79,15 @@ class Builder {
   bool begin(const decoders::StreamInfo& info) {
     m_channels = info.channels;
     m_mix = downmix_for(info.channels);
-    m_step = static_cast<double>(info.sample_rate) / static_cast<double>(kSoundSampleRate);
+    m_resampler.reset(info.sample_rate);
     m_max_source_frames = static_cast<std::uint64_t>(std::ceil(kMaxSoundSeconds * info.sample_rate));
     if (info.total_frames > m_max_source_frames) {
       m_too_long = true;
       return false;
     }
+    const double step = static_cast<double>(info.sample_rate) / static_cast<double>(kSoundSampleRate);
     const std::uint64_t expected = info.total_frames > 0 ? info.total_frames : static_cast<std::uint64_t>(info.sample_rate);
-    m_out.samples.reserve(static_cast<std::size_t>(static_cast<double>(expected) / m_step + 2.0) * kSoundChannels);
+    m_out.samples.reserve(static_cast<std::size_t>(static_cast<double>(expected) / step + 2.0) * kSoundChannels);
     return true;
   }
 
@@ -142,29 +97,16 @@ class Builder {
       return false;
     }
     for (std::size_t f = 0; f < count; ++f) {
-      const float* s = interleaved + f * m_channels;
       float left = 0.0f;
       float right = 0.0f;
-      for (unsigned c = 0; c < m_channels; ++c) {
-        left += s[c] * m_mix.left[c];
-        right += s[c] * m_mix.right[c];
+      downmix_frame(m_mix, interleaved + f * m_channels, m_channels, left, right);
+      m_resampler.push(left, right);
+      while (m_resampler.ready()) {
+        m_resampler.pop(left, right);
+        emit(left, right);
       }
-      if (m_seen == 0) {
-        m_prev[0] = left;
-        m_prev[1] = right;
-      }
-      // Output frames whose position falls between the previous source
-      // frame (m_seen - 1) and this one (m_seen).
-      const double here = static_cast<double>(m_seen);
-      while (m_next <= here) {
-        const float t = m_seen == 0 ? 0.0f : static_cast<float>(m_next - (here - 1.0));
-        emit(m_prev[0] + (left - m_prev[0]) * t, m_prev[1] + (right - m_prev[1]) * t);
-        m_next += m_step;
-      }
-      m_prev[0] = left;
-      m_prev[1] = right;
-      ++m_seen;
     }
+    m_seen += count;
     return true;
   }
 
@@ -173,19 +115,12 @@ class Builder {
     m_out.samples.push_back(clamp_sample(right));
   }
 
-  static float clamp_sample(float v) {
-    if (!(v >= -1.0f)) return -1.0f;  // also catches NaN
-    return v > 1.0f ? 1.0f : v;
-  }
-
   SoundData& m_out;
   unsigned m_channels = 0;
   Downmix m_mix;
-  double m_step = 1.0;  // source frames per output frame
-  double m_next = 0.0;  // source position of the next output frame
+  StereoResampler m_resampler;
   std::uint64_t m_seen = 0;
   std::uint64_t m_max_source_frames = 0;
-  float m_prev[2] = {0.0f, 0.0f};
   bool m_too_long = false;
 };
 
@@ -262,7 +197,7 @@ bool decode_sound(const std::uint8_t* data, std::size_t size, SoundData& out, st
   }
   if (builder.too_long()) {
     out.samples.clear();
-    error = "sound is longer than 30 seconds (sound effects only; music streaming is not supported yet)";
+    error = "sound is longer than 30 seconds (sound effects only; play longer audio with a scene's music line)";
     return false;
   }
   if (result != decoders::Result::kOk) {

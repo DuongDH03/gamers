@@ -35,6 +35,7 @@ target_compile_features(scraps_audio_decoders PUBLIC cxx_std_17)
 find_package(Threads REQUIRED)
 
 add_library(scraps_core STATIC
+  core/audio_convert.cpp
   core/file_watch.cpp
   core/fixed_step.cpp
   core/image.cpp
@@ -42,6 +43,7 @@ add_library(scraps_core STATIC
   core/level.cpp
   core/mixer.cpp
   core/movement.cpp
+  core/music.cpp
   core/scene.cpp
   core/serialize.cpp
   core/simulate.cpp
@@ -72,6 +74,7 @@ message(STATUS "Game-module boundary hash: ${SCRAPS_BOUNDARY_HASH} (${SCRAPS_BOU
 add_library(scraps_views STATIC
   views/controls.cpp
   views/isometric_view.cpp
+  views/scene_music.cpp
   views/side_view.cpp
   views/sound_bank.cpp
   views/sprite_bank.cpp

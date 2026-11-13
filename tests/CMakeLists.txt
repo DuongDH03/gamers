@@ -6,7 +6,8 @@ add_executable(scraps_tests
   test_net.cpp
   test_sandbox.cpp
   test_udp.cpp
-  test_game.cpp)
+  test_game.cpp
+  test_music.cpp)
 # test_game.cpp tests the apps' hot reload (apps/common/game_module.h).
 target_include_directories(scraps_tests PRIVATE ${PROJECT_SOURCE_DIR}/apps)
 target_link_libraries(scraps_tests PRIVATE scraps_net scraps_views scraps_headless scraps_udp scraps_dynlib scraps_sandbox)
@@ -55,6 +56,8 @@ add_executable(scraps_alloc_test alloc_test.cpp)
 target_include_directories(scraps_alloc_test PRIVATE ${PROJECT_SOURCE_DIR}/apps)
 target_link_libraries(scraps_alloc_test PRIVATE scraps_net scraps_views scraps_headless scraps_dynlib scraps_sandbox)
 scraps_target_defaults(scraps_alloc_test)
+# It also streams music from the audio test files.
+target_compile_definitions(scraps_alloc_test PRIVATE SCRAPS_TEST_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/audio")
 # The allocation test also polls a hot game module every frame.
 add_dependencies(scraps_alloc_test scraps_sandbox_module)
 target_compile_definitions(scraps_alloc_test PRIVATE

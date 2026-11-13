@@ -15,6 +15,10 @@ sound jump sounds/jump.wav
 sound coin sounds/coin.ogg
 sound drop sounds/drop.mp3 volume 0.8
 
+# Background music: streamed while it plays, looping (also from
+# tools/make_sandbox_sounds.py). It keeps playing when this file is reloaded.
+music sounds/music.ogg volume 0.6
+
 image grass  art/grass.png  frames 3
 image wall   art/wall.png   frames 2
 image stone  art/stone.png  frames 2

@@ -44,3 +44,6 @@ wrong question: the owner wants any sound file a game maker has to just work.
   which sound (`sandbox::sound_events`), the client plays them by name.
 - Sound effects are capped at 30 s and 32 MB per file; music streaming
   (decoding while playing) is a later, separate piece of work.
+  (Later, 2026-11-14: music streams through the same decoders,
+  `core/music.h`, spec `docs/specs/2026-11-14-offline-essentials-and-ui.md`
+  part 2. The cap for effects stays.)

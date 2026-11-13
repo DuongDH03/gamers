@@ -89,6 +89,7 @@ class SceneParser {
   bool on_layer(const Tokens& t);
   bool on_sky(const Tokens& t);
   bool on_sound(const Tokens& t);
+  bool on_music(const Tokens& t);
 
   std::string_view m_text;
   std::size_t m_position = 0;
@@ -99,6 +100,7 @@ class SceneParser {
   bool m_have_view = false;
   bool m_have_size = false;
   bool m_have_player = false;
+  bool m_have_music = false;
   std::uint32_t m_entity_total = 0;
 };
 
@@ -378,6 +380,27 @@ bool SceneParser::on_sound(const Tokens& t) {
   return true;
 }
 
+bool SceneParser::on_music(const Tokens& t) {
+  if (t.size() != 2 && t.size() != 4) return fail("expected 'music <path> [volume V]'");
+  if (m_have_music) return fail("'music' declared twice (a scene has one track)");
+  if (!is_valid_asset_path(t[1])) {
+    return fail("music path must be relative to the scene, use only letters, digits, '-', '_', '.', '/' "
+                "and no '..'");
+  }
+  MusicDef music;
+  music.path = make_asset_path(t[1]);
+  if (t.size() == 4) {
+    float volume = 0.0f;
+    if (t[2] != "volume" || !to_float(t[3], volume) || volume < 0.0f || volume > 4.0f) {
+      return fail("volume must be a number from 0 to 4");
+    }
+    music.volume = volume;
+  }
+  m_scene.level.music = music;
+  m_have_music = true;
+  return true;
+}
+
 bool SceneParser::on_spawn(const Tokens& t) {
   if (!expect_count(t, 4, "spawn <x> <y> <z>")) return false;
   if (m_scene.level.spawn_points.size() >= kMaxSpawnPoints) return fail("too many spawn points");
@@ -510,6 +533,8 @@ bool SceneParser::run() {
       ok = on_sky(tokens);
     } else if (directive == "sound") {
       ok = on_sound(tokens);
+    } else if (directive == "music") {
+      ok = on_music(tokens);
     } else {
       ok = fail("unknown directive '" + std::string(directive) + "'");
     }

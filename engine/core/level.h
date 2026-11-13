@@ -68,6 +68,14 @@ struct SoundDef {
 };
 
 constexpr std::size_t kMaxSounds = 64;
+
+// Background music: streamed while it plays (core/music.h), looping. An
+// empty path means none.
+struct MusicDef {
+  AssetPath path{};
+  float volume = 1.0f;  // 0..4
+};
+
 constexpr Color kDefaultSky{24, 26, 34};
 
 struct TileDef {
@@ -134,6 +142,7 @@ struct Level {
   std::uint16_t player_archetype = 0;
   std::vector<Vec3> spawn_points;
   std::vector<SoundDef> sounds;
+  MusicDef music;
   // The background: one colour, or a blend from the top of the screen to the bottom.
   Color sky_top = kDefaultSky;
   Color sky_bottom = kDefaultSky;

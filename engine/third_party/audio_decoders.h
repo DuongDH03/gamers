@@ -1,7 +1,7 @@
 #pragma once
 
 // A small C++ face on the vendored audio decoders (dr_wav, dr_flac, dr_mp3,
-// stb_vorbis). Only engine/core/sound.cpp uses it. The decoders themselves
+// stb_vorbis). Only engine/core/sound.cpp and engine/core/music.cpp use it. The decoders themselves
 // are compiled in audio_decoders.cpp, in the third-party target, without our
 // warnings-as-errors flags (engine/third_party/README.md).
 //
@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace scraps::decoders {
 
@@ -39,5 +40,40 @@ Result decode_wav(const std::uint8_t* data, std::size_t size, const Sink& sink);
 Result decode_flac(const std::uint8_t* data, std::size_t size, const Sink& sink);  // also Ogg FLAC
 Result decode_mp3(const std::uint8_t* data, std::size_t size, const Sink& sink);
 Result decode_vorbis(const std::uint8_t* data, std::size_t size, const Sink& sink);
+
+enum class Codec : std::uint8_t { kWav, kFlac, kMp3, kVorbis };  // kWav also reads AIFF, kFlac Ogg FLAC
+
+// Decodes when asked instead of all at once: music plays for minutes, so it
+// is decoded a chunk at a time while it plays (engine/core/music.cpp). The
+// encoded bytes stay with the caller and must not move or change while the
+// decoder is open.
+//
+// Everything a decoder needs is allocated in open(), so read() and rewind()
+// allocate nothing. dr_libs allocate through callbacks that use operator new,
+// so the engine's allocation test (tests/alloc_test.cpp) would see it if they
+// did; stb_vorbis mallocs its setup in open() and decodes with stack scratch.
+class PullDecoder {
+ public:
+  PullDecoder();
+  ~PullDecoder();
+  PullDecoder(const PullDecoder&) = delete;
+  PullDecoder& operator=(const PullDecoder&) = delete;
+
+  // False when the bytes are not that codec, or the stream has 0 or more
+  // than 8 channels, or a sample rate of 0 or above 384 kHz.
+  bool open(Codec codec, const std::uint8_t* data, std::size_t size, StreamInfo& info);
+  void close();
+  bool is_open() const { return m_state != nullptr; }
+
+  // Up to `frames` interleaved float frames in -1..1, channels in WAV order
+  // like Sink::frames. 0 at the end of the stream or when the data is damaged.
+  std::size_t read(float* interleaved, std::size_t frames);
+  // Back to the first frame. False when the decoder cannot seek.
+  bool rewind();
+
+ private:
+  struct State;
+  std::unique_ptr<State> m_state;
+};
 
 }  // namespace scraps::decoders
