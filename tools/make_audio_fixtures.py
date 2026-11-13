@@ -58,6 +58,22 @@ def main():
                     'sine=frequency=220:duration=35:sample_rate=8000', '-map_metadata', '-1',
                     '-c:a', 'libmp3lame', '-b:a', '8k', '-write_xing', '0',
                     os.path.join(OUT, 'long_35s.mp3')], check=True)
+    # Music streaming (core/music.h). Half a second of tone at 48 kHz in each
+    # lossy or compressed format: at 48 kHz nothing is resampled, so a loop's
+    # second pass must repeat its first exactly (tests: music_loops_...).
+    for name, options in (('loop48.ogg', ['-c:a', 'libvorbis', '-q:a', '0']),
+                          ('loop48.mp3', ['-c:a', 'libmp3lame', '-b:a', '32k']),
+                          ('loop48.flac', ['-c:a', 'flac'])):
+        subprocess.run([FFMPEG, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i',
+                        'sine=frequency=440:duration=0.5:sample_rate=48000', '-map_metadata', '-1',
+                        '-fflags', '+bitexact', '-flags:a', '+bitexact'] + options + [os.path.join(OUT, name)],
+                       check=True)
+    # 40 s of OGG Vorbis (music's main format), longer than any sound effect
+    # may be: it must stream past 30 s and loop. 8 kHz keeps it small.
+    subprocess.run([FFMPEG, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i',
+                    'sine=frequency=220:duration=40:sample_rate=8000', '-map_metadata', '-1',
+                    '-fflags', '+bitexact', '-flags:a', '+bitexact', '-c:a', 'libvorbis', '-q:a', '0',
+                    os.path.join(OUT, 'music_40s.ogg')], check=True)
     # The same FLAC under a misleading name: formats are judged by content.
     shutil.copyfile(os.path.join(OUT, 'tone.flac'), os.path.join(OUT, 'flac_named_as.wav'))
     for name in sorted(os.listdir(OUT)):

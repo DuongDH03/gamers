@@ -10,7 +10,7 @@ namespace scraps {
 namespace {
 
 constexpr std::uint32_t kWorldMagic = 0x57524353u;  // "SCRW" in little-endian bytes
-constexpr std::uint16_t kWorldFormatVersion = 3;  // 3: sky, sounds, entity facing
+constexpr std::uint16_t kWorldFormatVersion = 4;  // 3: sky, sounds, entity facing; 4: music
 
 // Limits for values read from untrusted bytes. Looser than what the engine
 // produces (kWorldExtent, scene limits), so valid worlds always pass.
@@ -477,6 +477,8 @@ void write_level(ByteWriter& writer, const Level& level) {
   }
   writer.write_color(level.sky_top);
   writer.write_color(level.sky_bottom);
+  for (char c : level.music.path) writer.write_u8(static_cast<std::uint8_t>(c));
+  writer.write_f32(level.music.volume);
 }
 
 bool read_level(ByteReader& reader, Level& level) {
@@ -569,7 +571,14 @@ bool read_level(ByteReader& reader, Level& level) {
   }
   level.sky_top = reader.read_color();
   level.sky_bottom = reader.read_color();
-  return reader.ok();
+  for (char& c : level.music.path) c = static_cast<char>(reader.read_u8());
+  level.music.path[kPathCapacity - 1] = '\0';
+  level.music.volume = reader.read_f32();
+  if (!reader.ok()) return false;
+  // No music is an empty path; anything else follows the scene's path rules.
+  const std::string_view music_path = path_view(level.music.path);
+  if (!music_path.empty() && !is_valid_asset_path(music_path)) return false;
+  return level.music.volume >= 0.0f && level.music.volume <= 4.0f;
 }
 
 // ---------------------------------------------------------------- world state

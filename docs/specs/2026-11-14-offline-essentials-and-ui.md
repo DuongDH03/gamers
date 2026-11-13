@@ -572,3 +572,103 @@ also in `System32`, so the minimal-PATH run proves the MinGW DLLs are
 complete but not the MSVC list (the zip carries the VC runtime next to the
 exe, which Windows loads first). The SDL3 window from an unzipped release was
 not opened (headless runs only).
+---
+
+## Results, part 2 (music)
+
+Built 2026-11-14 on branch `worktree-agent-a07bb4d37e41aa54e` (from `128e5b2`).
+
+**What exists now**
+
+- `core/music.h`, `MusicStream`: opens OGG Vorbis, MP3, FLAC, WAV (and AIFF),
+  recognised by content; decodes 4,096 source frames at a time through a new
+  pull face on the vendored decoders (`decoders::PullDecoder` in
+  `third_party/audio_decoders.h`); converts to 48 kHz stereo float; loops by
+  rewinding the decoder while the resampler carries on, so the last frame
+  leads straight into the first. `open_music(path, ...)` reads a file.
+- `core/audio_convert.h`: the downmix and the linear resampler, moved out of
+  `core/sound.cpp` so effects and music share one conversion. A stream equals
+  a whole-file decode sample for sample.
+- `Mixer`: `play_music(stream, volume, fade_in)` (the old track crossfades
+  out over the same time), `stop_music(fade_out)`, `set_music_track_volume`,
+  `music_playing`, `music_tracks`, `current_music`, and separate volumes:
+  `set_music_gain` (glides over 50 ms, for the player's setting times a pause
+  duck: **pause should call `set_music_gain(0.4f)` and `set_music_gain(1.0f)`**)
+  and `set_effects_gain`. Fades are equal power (sin in, cos out). Even an
+  instant stop fades over 10 ms. `Mixer::clear()` (a scene reload) leaves
+  the music alone.
+- Scene line `music <path> [volume V]` in `Level::music` (`MusicDef`), same
+  path rules as `sound`, at most one per scene; in the World's bytes
+  (`kWorldFormatVersion` 3 → 4); documented in `docs/scene-format.md`.
+- `views/scene_music.h`, `SceneMusic`: the client calls `update()` with each
+  new world. Same file: keeps playing (only the volume follows the scene).
+  Another file: 1.5 s crossfade. None: 1 s fade-out. First track: 1 s fade-in.
+  A file that fails is printed and shown on the HUD, and the game stays silent.
+- `apps/client/main.cpp`: three small edits (a `SceneMusic`, its `update()`
+  next to the sound bank's, and a `music:` line in the headless summary).
+- `tools/make_sandbox_sounds.py`: an original 30-second chiptune (16 bars at
+  128 BPM in A minor: pulse lead, thin arpeggio, triangle bass, noise drums;
+  melody written for this, not taken from anything). Notes that ring past the
+  end wrap to the start, so the loop has no seam of its own.
+  `games/sandbox/scenes/sounds/music.ogg`: 108,498 bytes, mono, 22,050 Hz,
+  exactly 661,500 samples (30.000 s). Every sandbox scene plays it at volume
+  0.6.
+
+**Tests** (7 new, in `tests/test_music.cpp`; 105 unit test functions now)
+
+| Test | Shows |
+|---|---|
+| `core.music_streams_equal_full_decode` | 12 files, every format and rates 22.05 to 48 kHz, 1, 2 and 6 channels: a stream read in pieces of 1 to 4,097 frames equals `decode_sound` exactly, looping or not |
+| `core.music_loops_without_a_gap` | a synthetic loop at 48 kHz repeats exactly and its seam is no steeper than the sine; at 44.1 kHz the resampled seam is no steeper either; OGG, MP3, FLAC, WAV at 48 kHz: the second pass equals the first; a 40 s OGG and a 35 s MP3 (refused as effects) stream past 30 s and loop |
+| `core.music_rejects_bad_files` | missing, not audio, empty, Opus, AAC, no samples, a loop under 1,024 frames, lying OGG comment lengths, and about 950 cut, corrupted and noisy files: errors, never a crash, samples always in −1..1 |
+| `core.mixer_crossfades_music_on_the_curve` | constant-level tracks: the crossfade follows 0.5·cos + 0.25·sin to 1e-5, stop follows cos, the 10 ms minimum fade, effects and music gains apart, the duck glides, `clear()` keeps the music |
+| `scene.music_line_parses_and_round_trips` | the line, its errors, and the World's bytes with and without music; hostile paths and volumes refused |
+| `views.scene_music_keeps_playing_across_reloads` | same file: same stream, no crossfade; another file crossfades; a missing file fades out and reports; no line stops |
+| `views.bundled_music_plays_in_every_scene` | each sandbox scene's music opens and is audible after the fade-in |
+
+`no_allocation_in_hot_path` now also streams music while mixing: it starts
+four tracks (OGG, MP3, FLAC, WAV; the short ones wrap many times, so every
+decoder's rewind runs), crossfades, ducks and stops. 0 allocations.
+
+Cost: mixing 60 ms of the sandbox music (what the client does per frame)
+took 0.11 ms on average and 0.44 ms at worst (MinGW Release, 1,000 calls,
+on a machine busy with other builds).
+
+**Deviations and findings**
+
+- **"Streams" means the file is kept in memory still encoded** and decoded
+  while it plays. stb_vorbis can only read from memory or a `FILE*` (and the
+  decoders are built without stdio), so reading the disk while playing
+  would have meant a different decoder for OGG. A 3-minute OGG is about
+  3 MB; the cap is 64 MB per music file.
+- **A crash in stb_vorbis 1.22, also reachable through sound effects:** it
+  trusts the length fields of an OGG file's comment header. A damaged file
+  made it write outside its memory, or free pointers it never set. Found by
+  the new damaged-file test. The vendored file is unchanged; instead
+  `audio_decoders.cpp` walks the Ogg pages and checks that header before
+  stb_vorbis sees any OGG file (music and effects). A regression case in
+  `core.music_rejects_bad_files` crashes without the check. Afterwards,
+  66,000 more damaged files (all formats, a scratch fuzzer, not committed)
+  ran through `decode_sound` and `MusicStream` without a crash.
+- dr_wav, dr_flac and dr_mp3 allocate through callbacks that use
+  `operator new`, so the allocation test would see them; they allocate only
+  when a stream opens. stb_vorbis keeps its default allocation (malloc in
+  open, stack scratch while decoding), the mode upstream fuzzes.
+- AIFF is accepted as music too (dr_wav reads it anyway).
+- The World's bytes changed (`kWorldFormatVersion` 4). The network protocol
+  did not change: clients load the level from their own scene file.
+- `.claude/skills/build-and-test/SKILL.md` still says 98 unit test functions
+  and lists no music tests; it was left alone (`.claude/**` is off limits
+  for this part).
+
+**Not verified here:** how it sounds. No one listened. What was checked
+instead: the decoded `music.ogg` is exactly 30.000 s; its seam (last sample
+to first) changes by 0.036, inside the track's normal sample-to-sample range
+(99th percentile 0.065); peak 0.81; the headless client reports the music
+playing and wrapping; the crossfade and duck curves are checked sample by
+sample.
+
+Build and tests: `mingw` and `msvc` both build with zero warnings, and
+`ctest` passes 23 of 23 on both. (One MinGW run had `server_runs` fail while
+other agents' test runs were going at the same time, most likely the same
+fixed UDP port; it passed alone and in a full rerun.)

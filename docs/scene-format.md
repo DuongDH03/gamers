@@ -49,6 +49,7 @@ except inside a layer's rows, where every line is a row. No end-of-line comments
 | `layer <z>` | The next `depth` lines are rows y = 0, 1, … of layer z, each exactly `width` characters. `.` is empty. |
 | `sky <r> <g> <b> [<r> <g> <b>]` | The background: one colour, or a blend from the first colour at the top of the screen to the second at the bottom. Default: dark blue-grey (24, 26, 34). |
 | `sound <name> <path> [volume V]` | A sound effect, in any common audio format (see below). The game plays it by name. `volume` 0 to 4, default 1. |
+| `music <path> [volume V]` | Background music: plays, looping, when the scene loads (see [Music](#music)). At most one per scene. `volume` 0 to 4, default 1. |
 
 Directives that refer to something (`player`, `entity`, `crowd`, layer
 symbols) must come after it is declared.
@@ -97,12 +98,41 @@ Decided in [2026-11-12-audio-formats](decisions/2026-11-12-audio-formats.md).
   `tools/make_sandbox_sounds.py` into `games/sandbox/scenes/sounds/` (WAV,
   OGG and MP3 on purpose).
 
+## Music
+
+Spec: [2026-11-14-offline-essentials-and-ui](specs/2026-11-14-offline-essentials-and-ui.md), part 2.
+
+- **Streamed, not loaded whole:** the file is kept in memory still encoded and
+  decoded a chunk at a time while it plays ([core/music.h](../engine/core/music.h)),
+  so the 30-second limit for sound effects does not apply. At most 64 MB per
+  file (a long WAV is better stored as OGG).
+- **Formats:** OGG Vorbis, MP3, FLAC and WAV (also AIFF), recognised by
+  content like sounds; any sample rate, 1 to 8 channels. Same path rules as
+  images and sounds.
+- **Looping:** the track loops from its last sample straight to its first,
+  with nothing added or dropped. Whether that sounds seamless depends on the
+  file: WAV, FLAC and OGG Vorbis are sample-exact; MP3 encoders pad the ends a
+  little. A track shorter than 1,024 samples is refused when it first wraps.
+- **Fades:** the first track fades in over 1 s. A scene with a different
+  `music` file crossfades over 1.5 s (equal power: the old track follows a
+  cosine down while the new one follows a sine up, so the loudness stays
+  steady). A scene without a `music` line fades the music out over 1 s.
+- **Volumes:** `volume` is the track's own level. The mixer also has a music
+  volume and an effects volume, separate from each other (for a settings menu,
+  and for ducking the music during a pause).
+- **Only clients play music**; the server ignores the line. A missing or broken
+  file is reported, and the game stays silent instead of stopping. The sandbox
+  plays `sounds/music.ogg`, a 30-second chiptune loop made by
+  `tools/make_sandbox_sounds.py`.
+
 ## Hot reload
 
 `scraps_server` and the offline client watch the scene file. Saving it while
 the game runs rebuilds the world from the new file: every connected player
 re-joins at a spawn point, and every client reloads the scene and its
-images and sounds. A file with an error is not applied; the error is printed (and shown
+images and sounds. Music that the reloaded scene still names keeps playing
+without a restart (only its `volume` follows the file); another file
+crossfades in. A file with an error is not applied; the error is printed (and shown
 on the offline client's HUD) and the old world keeps running. Online, every
 client needs the edited file too, or it stops with "differs from the
 server's copy".

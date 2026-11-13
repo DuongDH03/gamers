@@ -18,7 +18,14 @@ stb_image is compiled once, PNG only, in `stb/stb_image_impl.cpp` (target
 
 The audio decoders are compiled once, memory only (no stdio), in
 `audio_decoders.cpp` (target `scraps_audio_decoders`), behind the small C++
-face `audio_decoders.h`; only `engine/core/sound.cpp` uses it. Decision:
+face `audio_decoders.h`; only `engine/core/sound.cpp` (whole sounds) and
+`engine/core/music.cpp` (streamed music, `PullDecoder`) use it. Decision:
 `docs/decisions/2026-11-12-audio-formats.md`.
+
+The vendored files are unchanged. One known weakness of stb_vorbis 1.22 is
+worked around in `audio_decoders.cpp` instead: it trusts the length fields of
+an OGG file's comment header, and a damaged file can make it write outside
+its memory. Every OGG file's comment header is checked before stb_vorbis
+sees it (test: `core.music_rejects_bad_files`).
 
 SDL3 is not vendored: CMake downloads a pinned release (`cmake/ScrapsSDL3.cmake`).

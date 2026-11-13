@@ -46,6 +46,7 @@
 #include "platform/services.h"
 #include "selected_game.h"
 #include "views/controls.h"
+#include "views/scene_music.h"
 #include "views/sound_bank.h"
 #include "views/sprite_bank.h"
 #include "views/view_factory.h"
@@ -372,6 +373,7 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
   // to the backend a little ahead (about 60 ms queued).
   Mixer mixer;
   SoundBank sounds;
+  SceneMusic music;  // the scene's music line, streamed; kept across a hot reload of the same file
   constexpr std::size_t kAudioAheadFrames = kSoundSampleRate * 60 / 1000;
   std::vector<float> mix_buffer(kAudioAheadFrames * kSoundChannels);
   std::size_t sounds_played = 0;
@@ -469,6 +471,11 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
         notice = "some sounds failed to load; see the console";
         notice_until = now + 6.0;
       }
+      if (!music.update(client.current_world().level, options.scene_dir, mixer, errors)) {
+        std::fprintf(stderr, "the music failed to load (it stays silent): %s\n", errors.c_str());
+        notice = "the music failed to load; see the console";
+        notice_until = now + 6.0;
+      }
     }
 
     if (client.has_world() && !view) {
@@ -497,7 +504,6 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
       if (!pause.toggle(session.server.get(), client, clock)) {
         notice = "pause works offline only";
       } else {
-        // TODO(merge): duck music to 40% while paused (part 2's mixer), back to full on resume.
         notice = pause.paused() ? "paused" : "resumed";
       }
       notice_until = now + 2.0;
@@ -656,6 +662,9 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
     }
     renderer.end_frame();
 
+    // Music ducks to 40% while paused (spec part 4); the mixer glides to the target.
+    mixer.set_music_gain(pause.paused() ? 0.4f : 1.0f);
+
     // Keep the audio device about 60 ms ahead.
     const std::size_t queued = platform.audio->queued_frames();
     if (queued < kAudioAheadFrames) {
@@ -701,6 +710,13 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
         static_cast<unsigned long>(count_alive(world)), static_cast<unsigned long>(sprites.loaded_count()),
         static_cast<unsigned long>(mixer.sound_count()), static_cast<unsigned long>(sounds_played),
         session.jobs->worker_count());
+    const MusicStream* playing = mixer.current_music();
+    if (playing == nullptr) {
+      std::printf("music: none\n");
+    } else {
+      std::printf("music: %s (%s, wrapped to its start %u times)\n", music.path().c_str(),
+                  audio_format_name(playing->format()), static_cast<unsigned>(playing->loops()));
+    }
   }
   return 0;
 }
