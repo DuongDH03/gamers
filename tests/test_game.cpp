@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/headless/headless_backend.h"
 #include "common/game_module.h"
 #include "core/game_api.h"
 #include "core/scene.h"
@@ -32,6 +33,7 @@
 #include "net/loopback.h"
 #include "net/server.h"
 #include "sandbox/sandbox.h"
+#include "views/controls.h"
 #include "views/view_factory.h"
 
 using namespace scraps;
@@ -39,6 +41,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
+using scraps_apps::check_game_api;
 using scraps_apps::GameModule;
 using scraps_apps::GameReload;
 using scraps_apps::GameTargets;
@@ -191,9 +194,10 @@ void static_api_describes_the_sandbox(test::Context& ctx) {
   CHECK(!game.hot());
   CHECK(std::string(game.name()) == "sandbox");
   CHECK(game.api().simulate == &sandbox::simulate);
-  CHECK(game.api().binding_count == 2);
+  CHECK(game.api().binding_count == 3);
   CHECK(game.api().bindings[0].key == Key::kE && game.api().bindings[0].command == sandbox::kDropCoin);
   CHECK(game.api().bindings[1].button == MouseButton::kLeft && game.api().bindings[1].command == sandbox::kPlaceCoin);
+  CHECK(game.api().bindings[2].pad == GamepadButton::kWest && game.api().bindings[2].command == sandbox::kDropCoin);
   World world = side_world();
   char hud[16];
   game.hud(world, 0, hud, sizeof(hud));
@@ -201,6 +205,57 @@ void static_api_describes_the_sandbox(test::Context& ctx) {
   // A static game has nothing to watch.
   std::string message;
   CHECK(game.poll(0.0, GameTargets(), message) == GameReload::kNone);
+}
+
+// GameApi version 2: a game binding may name a gamepad button, and the app
+// puts it into Controls like a key binding.
+void gamepad_bindings_are_checked_and_installed(test::Context& ctx) {
+  auto api_with = [](const GameBinding* bindings, std::size_t count) {
+    GameApi api = *sandbox::game_api();
+    api.bindings = bindings;
+    api.binding_count = count;
+    return api;
+  };
+  std::string error;
+  const GameBinding good[] = {pad_binding(GamepadButton::kWest, sandbox::kDropCoin),
+                              pad_binding(GamepadButton::kStart, game_command(3))};
+  GameApi api = api_with(good, 2);
+  CHECK(check_game_api(&api, error));
+
+  // Exactly one source per binding, each in range.
+  GameBinding two_sources = key_binding(Key::kE, sandbox::kDropCoin);
+  two_sources.pad = GamepadButton::kSouth;
+  GameBinding no_source;
+  no_source.command = sandbox::kDropCoin;
+  GameBinding out_of_range = pad_binding(GamepadButton::kSouth, sandbox::kDropCoin);
+  out_of_range.pad = static_cast<GamepadButton>(200);
+  const GameBinding no_command = pad_binding(GamepadButton::kSouth, CommandType::kNone);
+  const GameBinding server_only = pad_binding(GamepadButton::kSouth, CommandType::kPlayerJoin);
+  for (const GameBinding& bad : {two_sources, no_source, out_of_range, no_command, server_only}) {
+    api = api_with(&bad, 1);
+    error.clear();
+    CHECK(!check_game_api(&api, error));
+    CHECK(error == "input binding 0 of the game is not valid");
+  }
+
+  // The sandbox's own: west drops a coin, through the static game's install.
+  GameModule game;
+  CHECK(game.use_static(sandbox::game_api(), error));
+  Controls controls;
+  GameTargets targets;
+  targets.controls = &controls;
+  game.install(targets);
+  headless::HeadlessBackend backend;
+  backend.input().connect_gamepad(true);
+  backend.input().press(GamepadButton::kWest);
+  backend.window().pump_events();
+  controls.sample(backend.input());
+  const std::unique_ptr<View> view = make_view(Perspective::kSide);
+  CommandList out;
+  controls.emit(*view, view->movement_rules(), 0, out);
+  int drops = 0;
+  for (const Command& command : out) drops += command.type == sandbox::kDropCoin ? 1 : 0;
+  CHECK(drops == 1);
 }
 
 void sound_event_names_are_copies(test::Context& ctx) {
@@ -496,7 +551,8 @@ void mismatch_is_refused(test::Context& ctx) {
   const SimulateFn good_simulate = module.api().simulate;
   int seconds = 10;
   double now = 0.0;
-  for (const char* bad_file : {SCRAPS_BAD_VERSION_MODULE_FILE, SCRAPS_BAD_LAYOUT_MODULE_FILE}) {
+  for (const char* bad_file :
+       {SCRAPS_BAD_VERSION_MODULE_FILE, SCRAPS_BAD_OLD_MODULE_FILE, SCRAPS_BAD_LAYOUT_MODULE_FILE}) {
     const std::vector<char> bytes = read_file(bad_file);
     seconds += 10;
     CHECK(write_file(watched, bytes, bytes.size(), module_time() + std::chrono::seconds(seconds)));
@@ -505,6 +561,10 @@ void mismatch_is_refused(test::Context& ctx) {
     CHECK(module.poll(now + 0.5, GameTargets(), message) == GameReload::kRefused);
     now += 1.0;
     CHECK(message.find("game module not reloaded: built against another engine") == 0);
+    if (std::string(bad_file) == SCRAPS_BAD_OLD_MODULE_FILE) {
+      // A module from before gamepad bindings says which version it has.
+      CHECK(message.find("(game API version 1, this program has 2)") != std::string::npos);
+    }
     // The old code is still the one running, still loaded from the same copy.
     CHECK(module.api().simulate == good_simulate);
     CHECK(std::string(module.name()) == "sandbox");
@@ -596,6 +656,7 @@ void reload_waits_for_a_stable_file(test::Context& ctx) {
 
 void register_game_tests(test::Registry& registry) {
   registry.add("game.static_api_describes_the_sandbox", static_api_describes_the_sandbox);
+  registry.add("game.gamepad_bindings_are_checked_and_installed", gamepad_bindings_are_checked_and_installed);
   registry.add("game.sound_event_names_are_copies", sound_event_names_are_copies);
   registry.add("game.module_matches_static", module_matches_static);
   registry.add("game.swap_keeps_the_world", swap_keeps_the_world);

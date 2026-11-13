@@ -78,6 +78,7 @@ void print_usage() {
       "                        when rebuilt (cmake --build --preset mingw-game / msvc-game)\n"
       "keys: WASD/arrows move, Space jump, E drop coin, left click place coin, V next view,\n"
       "      -/= or wheel zoom, Esc quit\n"
+      "gamepad: left stick/d-pad move, south (A on Xbox) jump, west (X on Xbox) drop coin\n"
       "offline, editing the .scene file reloads it while the game runs\n");
 }
 
@@ -211,8 +212,8 @@ bool start_session(const Options& options, Session& session, std::string& error)
 // Scripted input for headless runs: walk in a square, jump, drop a coin
 // every 360 frames (in the side scene the player stands still then and picks
 // it up again, so a long --hot-game run keeps counting coins), sweep the
-// pointer and click once, and switch views, so a headless run exercises the
-// whole engine.
+// pointer and click once, switch views, and plug in a gamepad for a while
+// (stick, south, west), so a headless run exercises the whole engine.
 void drive_autopilot(headless::HeadlessInput& input, long frame, float width, float height) {
   const Key walk[4] = {Key::kD, Key::kS, Key::kA, Key::kW};
   const long phase = (frame / 90) % 4;
@@ -243,6 +244,25 @@ void drive_autopilot(headless::HeadlessInput& input, long frame, float width, fl
     input.release(MouseButton::kLeft);
   }
   if (frame == 350) input.scroll(1.0f);
+
+  // Frames 450 to 569: a gamepad. The keys above still walk; the stick is
+  // only read while no movement key is held, so it shows in the HUD notice
+  // and in the commands, not in where the walk ends.
+  if (frame == 450) input.connect_gamepad(true);
+  if (frame == 570) input.connect_gamepad(false);
+  if (frame >= 450 && frame < 570) {
+    input.set_axis(GamepadAxis::kLeftX, 0.7f * std::cos(angle));
+    input.set_axis(GamepadAxis::kLeftY, 0.7f * std::sin(angle));
+    auto pad_tap = [&input](GamepadButton button, bool now) {
+      if (now) {
+        input.press(button);
+      } else {
+        input.release(button);
+      }
+    };
+    pad_tap(GamepadButton::kSouth, frame == 470);
+    pad_tap(GamepadButton::kWest, frame == 500);
+  }
 }
 
 // Outlines the grid cell that holds `point`: its twelve edges, projected.
@@ -330,6 +350,7 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
   long fps_frames = 0;
   long frame = 0;
   long ticks = 0;
+  bool gamepad_was_connected = false;
 
   while (!platform.window->close_requested() && (options.frames == 0 || frame < options.frames)) {
     // Rule 2 and the "only the loop reads the clock" code rule: time is
@@ -349,6 +370,13 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
     platform.window->pump_events();
     const Input& input = *platform.input;
     if (input.was_pressed(Key::kEscape)) break;
+    if (input.gamepad_connected() != gamepad_was_connected) {
+      // Controls read the pad through Input like the keys; this only says so.
+      gamepad_was_connected = input.gamepad_connected();
+      notice = gamepad_was_connected ? "gamepad connected" : "gamepad disconnected";
+      notice_until = now + 3.0;
+      std::printf("%s\n", notice.c_str());
+    }
 
     if (session.hub) session.hub->set_now(now);
     client.poll(now);
@@ -508,7 +536,8 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
                   static_cast<unsigned>(client.unacknowledged_inputs()));
     renderer.draw_debug_text(10.0f, 24.0f, line, Color(200, 200, 210));
     renderer.draw_debug_text(10.0f, 38.0f,
-                             "WASD move  Space jump  E drop coin  Click place coin  V view  -/= wheel zoom  Esc quit",
+                             "WASD/stick move  Space/south jump  E/west drop coin  Click place coin  V view  "
+                             "-/= wheel zoom  Esc quit",
                              Color(150, 150, 165));
     if (now < notice_until) renderer.draw_debug_text(10.0f, 52.0f, notice.c_str(), Color(255, 220, 120));
     renderer.end_frame();

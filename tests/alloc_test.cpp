@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -94,9 +95,12 @@ int main() {
   std::vector<float> mixed(800 * kSoundChannels);
 
   // Mouse: a pointer that moves every frame and clicks now and then, sampled
-  // and picked through every view like the client does.
+  // and picked through every view like the client does. Gamepad: a stick
+  // that circles (crossing the dead zone) and south and west (bound by the
+  // sandbox) pressed now and then.
   headless::HeadlessBackend input_backend;
   headless::HeadlessInput& input = input_backend.input();
+  input.connect_gamepad(true);
   Controls controls;
   controls.bind(MouseButton::kLeft, sandbox::kPlaceCoin);
   CommandList picked;
@@ -165,6 +169,16 @@ int main() {
       } else {
         input.release(MouseButton::kLeft);
       }
+      const float stick = 0.1f * static_cast<float>(t % 11);  // 0 to 1: inside and outside the dead zone
+      input.set_axis(GamepadAxis::kLeftX, stick * std::cos(0.3f * static_cast<float>(t)));
+      input.set_axis(GamepadAxis::kLeftY, stick * std::sin(0.3f * static_cast<float>(t)));
+      if (t % 10 == 5) {
+        input.press(GamepadButton::kSouth);
+        input.press(GamepadButton::kWest);
+      } else {
+        input.release(GamepadButton::kSouth);
+        input.release(GamepadButton::kWest);
+      }
       input_backend.window().pump_events();
       for (std::unique_ptr<View>& view : views) {
         controls.sample(input, *view, camera, camera.target);
@@ -194,8 +208,8 @@ int main() {
   const long allocations = g_allocations.load() - before;
 
   std::printf(
-      "%ld allocations in 300 ticks of threaded simulate + world copy + delta encode/decode + mixing + mouse sampling "
-      "and picking + hot game module polling, HUD and sounds + 3 textured view draws with shadows (%lu entities, "
+      "%ld allocations in 300 ticks of threaded simulate + world copy + delta encode/decode + mixing + mouse and "
+      "gamepad sampling and picking + hot game module polling, HUD and sounds + 3 textured view draws with shadows (%lu entities, "
       "pick sum %.1f, HUD %ld)\n",
       allocations, static_cast<unsigned long>(count_alive(world)), static_cast<double>(pick_sum), hud_length);
   if (bad_deltas != 0) {

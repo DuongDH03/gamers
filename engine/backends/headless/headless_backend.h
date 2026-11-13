@@ -17,9 +17,10 @@
 // leak in the abstraction.
 namespace scraps::headless {
 
-// Keyboard and mouse state driven by code. press()/release(), move_pointer()
-// and scroll() take effect at the next Window::pump_events(), exactly like
-// real events: a press, a release or a scroll is seen for one frame.
+// Keyboard, mouse and gamepad state driven by code. press()/release(),
+// move_pointer(), scroll(), set_axis() and connect_gamepad() take effect at
+// the next Window::pump_events(), exactly like real events: a press, a
+// release or a scroll is seen for one frame.
 class HeadlessInput final : public Input {
  public:
   bool is_down(Key key) const override;
@@ -32,6 +33,12 @@ class HeadlessInput final : public Input {
   bool was_released(MouseButton button) const override;
   float wheel() const override { return m_wheel; }
 
+  bool gamepad_connected() const override { return m_pad_connected; }
+  bool is_down(GamepadButton button) const override;
+  bool was_pressed(GamepadButton button) const override;
+  bool was_released(GamepadButton button) const override;
+  float axis(GamepadAxis axis) const override;
+
   void press(Key key);
   void release(Key key);
   // In renderer output pixels. Also puts the pointer inside the window.
@@ -39,12 +46,24 @@ class HeadlessInput final : public Input {
   void press(MouseButton button);
   void release(MouseButton button);
   void scroll(float notches);
+  // Plugs a gamepad in (true) or pulls it out (false). Pulling it out lets go
+  // of its buttons and centres its axes. While no pad is connected, gamepad
+  // presses and axis moves are ignored, as they would be on a real machine.
+  void connect_gamepad(bool connected);
+  void press(GamepadButton button);
+  void release(GamepadButton button);
+  // Clamped to the axis's range (-1..1, triggers 0..1); not finite counts as 0.
+  void set_axis(GamepadAxis axis, float value);
   void begin_frame();  // called by HeadlessWindow::pump_events()
 
  private:
   static constexpr std::size_t kButtons = static_cast<std::size_t>(MouseButton::kCount);
+  static constexpr std::size_t kPadButtons = static_cast<std::size_t>(GamepadButton::kCount);
+  static constexpr std::size_t kPadAxes = static_cast<std::size_t>(GamepadAxis::kCount);
   static std::size_t slot(Key key) { return static_cast<std::size_t>(key); }
   static std::size_t slot(MouseButton button) { return static_cast<std::size_t>(button); }
+  static std::size_t slot(GamepadButton button) { return static_cast<std::size_t>(button); }
+  static std::size_t slot(GamepadAxis axis) { return static_cast<std::size_t>(axis); }
 
   std::array<bool, static_cast<std::size_t>(Key::kCount)> m_down{};
   std::array<bool, static_cast<std::size_t>(Key::kCount)> m_pending_pressed{};
@@ -61,6 +80,19 @@ class HeadlessInput final : public Input {
   std::array<bool, kButtons> m_button_released{};
   float m_pending_wheel = 0.0f;
   float m_wheel = 0.0f;
+
+  // Gamepad: the pending_ values are what code set since the last frame; the
+  // others are what this frame reports.
+  bool m_pending_pad_connected = false;
+  bool m_pad_connected = false;
+  std::array<bool, kPadButtons> m_pending_pad_down{};
+  std::array<bool, kPadButtons> m_pending_pad_pressed{};
+  std::array<bool, kPadButtons> m_pending_pad_released{};
+  std::array<bool, kPadButtons> m_pad_down{};
+  std::array<bool, kPadButtons> m_pad_pressed{};
+  std::array<bool, kPadButtons> m_pad_released{};
+  std::array<float, kPadAxes> m_pending_axes{};
+  std::array<float, kPadAxes> m_axes{};
 };
 
 class HeadlessWindow final : public Window {

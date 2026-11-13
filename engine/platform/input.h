@@ -20,6 +20,28 @@ enum class Key : std::uint8_t {
 // Mouse buttons the engine knows about.
 enum class MouseButton : std::uint8_t { kLeft, kRight, kMiddle, kCount };
 
+// Gamepad buttons, named by position, not by label: kSouth is the bottom face
+// button (A on Xbox, Cross on PlayStation, B on Nintendo), kEast the right
+// one, and so on. A game binds "south" and every pad agrees where that is.
+enum class GamepadButton : std::uint8_t {
+  kSouth, kEast, kWest, kNorth,
+  kDpadUp, kDpadDown, kDpadLeft, kDpadRight,
+  kStart, kBack,
+  kLeftShoulder, kRightShoulder,
+  kLeftStick, kRightStick,  // pressing a stick in
+  kCount
+};
+
+// Gamepad axes. Sticks are -1..1 with screen conventions: x right is +1, y
+// down is +1 (like SDL and like screen pixels). Triggers are 0..1. Values are
+// raw: no dead zone, because what counts as "resting" is a gameplay choice
+// (Controls applies one).
+enum class GamepadAxis : std::uint8_t {
+  kLeftX, kLeftY, kRightX, kRightY,
+  kLeftTrigger, kRightTrigger,
+  kCount
+};
+
 // A point on screen in renderer output pixels. The platform layer has no Vec2
 // (that lives in core), so it has its own small type.
 struct PointerPosition {
@@ -27,9 +49,13 @@ struct PointerPosition {
   float y = 0.0f;
 };
 
-// Keyboard and mouse state for the current rendered frame. Updated by
-// Window::pump_events(). Polled, not an event list: two clicks inside one
+// Keyboard, mouse and gamepad state for the current rendered frame. Updated
+// by Window::pump_events(). Polled, not an event list: two clicks inside one
 // frame count as one, which is fine for a game.
+//
+// Gamepad: only the first connected pad is read (local multiplayer with
+// several pads is out of scope). While none is connected, every button is up
+// and every axis is 0.
 class Input {
  public:
   virtual ~Input() = default;
@@ -53,6 +79,18 @@ class Input {
   virtual bool was_released(MouseButton button) const = 0;
   // Wheel notches this frame; positive = away from the user.
   virtual float wheel() const = 0;
+
+  // True while a gamepad is connected and being read.
+  virtual bool gamepad_connected() const = 0;
+  // True while the button is held.
+  virtual bool is_down(GamepadButton button) const = 0;
+  // True only in the frame in which the button went down. A tap shorter than
+  // a frame is seen as pressed and released in the same frame.
+  virtual bool was_pressed(GamepadButton button) const = 0;
+  // True only in the frame in which the button went up.
+  virtual bool was_released(GamepadButton button) const = 0;
+  // The axis now, raw (see GamepadAxis): -1..1 for sticks, 0..1 for triggers.
+  virtual float axis(GamepadAxis axis) const = 0;
 };
 
 }  // namespace scraps

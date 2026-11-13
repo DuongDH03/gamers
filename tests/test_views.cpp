@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -680,6 +681,364 @@ void click_is_emitted_once(test::Context& ctx) {
   CHECK(!full.bind(Key::kQ, place));
 }
 
+// ------------------------------------------------------------ gamepad
+
+int count_type(const CommandList& list, CommandType type) {
+  int n = 0;
+  for (const Command& command : list) n += command.type == type ? 1 : 0;
+  return n;
+}
+
+// One frame and one tick: what Controls sends for the input as it is now.
+CommandList frame_and_tick(headless::HeadlessBackend& backend, Controls& controls, const View& view,
+                           PlayerId player = 0) {
+  backend.window().pump_events();
+  controls.sample(backend.input());
+  CommandList out;
+  controls.emit(view, view.movement_rules(), player, out);
+  return out;
+}
+
+Vec2 move_of(const CommandList& list) {
+  for (const Command& command : list) {
+    if (command.type == CommandType::kMove) return Vec2(command.vec.x, command.vec.y);
+  }
+  return Vec2(99.0f, 99.0f);  // no Move at all: fails every check below
+}
+
+// Press, release and axes are seen at the next frame; a tap inside one frame
+// is both pressed and released in it; nothing works while unplugged.
+void headless_gamepad_latches_per_frame(test::Context& ctx) {
+  headless::HeadlessBackend backend;
+  headless::HeadlessInput& input = backend.input();
+  headless::HeadlessWindow& window = backend.window();
+  CHECK(!input.gamepad_connected());
+
+  // Unplugged: presses and axes are ignored.
+  input.press(GamepadButton::kSouth);
+  input.set_axis(GamepadAxis::kLeftX, 1.0f);
+  window.pump_events();
+  CHECK(!input.is_down(GamepadButton::kSouth) && !input.was_pressed(GamepadButton::kSouth));
+  CHECK(input.axis(GamepadAxis::kLeftX) == 0.0f);
+
+  input.connect_gamepad(true);
+  CHECK(!input.gamepad_connected());  // not before the frame starts
+  window.pump_events();
+  CHECK(input.gamepad_connected());
+
+  input.press(GamepadButton::kSouth);
+  input.set_axis(GamepadAxis::kLeftX, -0.5f);
+  CHECK(!input.is_down(GamepadButton::kSouth) && input.axis(GamepadAxis::kLeftX) == 0.0f);
+  window.pump_events();
+  CHECK(input.is_down(GamepadButton::kSouth) && input.was_pressed(GamepadButton::kSouth));
+  CHECK(!input.was_released(GamepadButton::kSouth));
+  CHECK(input.axis(GamepadAxis::kLeftX) == -0.5f);
+  window.pump_events();  // still held, axis still there
+  CHECK(input.is_down(GamepadButton::kSouth) && !input.was_pressed(GamepadButton::kSouth));
+  CHECK(input.axis(GamepadAxis::kLeftX) == -0.5f);
+  input.release(GamepadButton::kSouth);
+  window.pump_events();
+  CHECK(!input.is_down(GamepadButton::kSouth) && input.was_released(GamepadButton::kSouth));
+  window.pump_events();
+  CHECK(!input.was_released(GamepadButton::kSouth));
+
+  // A tap shorter than a frame.
+  input.press(GamepadButton::kWest);
+  input.release(GamepadButton::kWest);
+  window.pump_events();
+  CHECK(input.was_pressed(GamepadButton::kWest) && input.was_released(GamepadButton::kWest));
+  CHECK(!input.is_down(GamepadButton::kWest));
+
+  // Axes are clamped to their range; not finite is 0.
+  input.set_axis(GamepadAxis::kLeftY, 3.0f);
+  input.set_axis(GamepadAxis::kRightX, -7.0f);
+  input.set_axis(GamepadAxis::kLeftTrigger, -0.5f);
+  input.set_axis(GamepadAxis::kRightTrigger, std::numeric_limits<float>::quiet_NaN());
+  input.set_axis(GamepadAxis::kRightY, std::numeric_limits<float>::infinity());
+  window.pump_events();
+  CHECK(input.axis(GamepadAxis::kLeftY) == 1.0f);
+  CHECK(input.axis(GamepadAxis::kRightX) == -1.0f);
+  CHECK(input.axis(GamepadAxis::kLeftTrigger) == 0.0f);
+  CHECK(input.axis(GamepadAxis::kRightTrigger) == 0.0f);
+  CHECK(input.axis(GamepadAxis::kRightY) == 0.0f);
+
+  // Out of range is never down and reads 0.
+  input.press(GamepadButton::kCount);
+  window.pump_events();
+  CHECK(!input.is_down(GamepadButton::kCount) && !input.was_pressed(GamepadButton::kCount));
+  CHECK(input.axis(GamepadAxis::kCount) == 0.0f);
+
+  // Unplugged while held: let go, axes centred, no "released".
+  input.press(GamepadButton::kNorth);
+  window.pump_events();
+  input.connect_gamepad(false);
+  window.pump_events();
+  CHECK(!input.gamepad_connected());
+  CHECK(!input.is_down(GamepadButton::kNorth) && !input.was_released(GamepadButton::kNorth));
+  CHECK(input.axis(GamepadAxis::kLeftX) == 0.0f && input.axis(GamepadAxis::kLeftY) == 0.0f);
+}
+
+void stick_dead_zone_is_radial_and_rescaled(test::Context& ctx) {
+  const float dz = Controls::kStickDeadZone;
+  CHECK(dz == 0.2f);
+  // Resting, or inside the circle: nothing.
+  CHECK(Controls::apply_dead_zone(Vec2()) == Vec2());
+  CHECK(Controls::apply_dead_zone(Vec2(0.19f, 0.0f)) == Vec2());
+  CHECK(Controls::apply_dead_zone(Vec2(0.0f, -0.199f)) == Vec2());
+  // Radial: (0.15, 0.15) is 0.21 long, just outside, though each axis alone is inside.
+  const Vec2 diagonal = Controls::apply_dead_zone(Vec2(0.15f, 0.15f));
+  CHECK(diagonal.x > 0.0f && diagonal.y > 0.0f);
+  CHECK_NEAR(length(diagonal), (std::sqrt(0.045f) - dz) / (1.0f - dz), 1e-5);
+  CHECK_NEAR(diagonal.x, diagonal.y, 1e-6);  // direction kept
+  // Rescaled: starts at 0 at the edge, half way at 0.6, all the way at 1.
+  CHECK_NEAR(length(Controls::apply_dead_zone(Vec2(0.2001f, 0.0f))), 0.0f, 1e-3);
+  CHECK_NEAR(Controls::apply_dead_zone(Vec2(0.6f, 0.0f)).x, 0.5f, 1e-5);
+  CHECK_NEAR(Controls::apply_dead_zone(Vec2(0.0f, -1.0f)).y, -1.0f, 1e-6);
+  // A stick's corner can read (1, 1): still no longer than 1.
+  CHECK_NEAR(length(Controls::apply_dead_zone(Vec2(1.0f, 1.0f))), 1.0f, 1e-5);
+  // Garbage in, nothing out.
+  CHECK(Controls::apply_dead_zone(Vec2(std::numeric_limits<float>::quiet_NaN(), 0.5f)) == Vec2());
+  CHECK(Controls::apply_dead_zone(Vec2(std::numeric_limits<float>::infinity(), 0.0f)) == Vec2());
+
+  // Through Controls: a stick resting a little off centre does not walk.
+  headless::HeadlessBackend backend;
+  backend.input().connect_gamepad(true);
+  backend.input().set_axis(GamepadAxis::kLeftX, 0.12f);
+  backend.input().set_axis(GamepadAxis::kLeftY, -0.1f);
+  const std::unique_ptr<View> view = make_view(Perspective::kTopDown);
+  Controls controls;
+  CHECK(move_of(frame_and_tick(backend, controls, *view)) == Vec2());
+}
+
+// The stick moves like the keys, through the View's screen-to-ground mapping
+// (Rule 4), but analog: what the player sees is the direction pushed, and
+// Move's vec is as long as the push (after the dead zone).
+void stick_moves_the_way_it_is_pushed_in_every_view(test::Context& ctx) {
+  const Perspective perspectives[] = {Perspective::kTopDown, Perspective::kSide, Perspective::kIsometric};
+  const Vec2 pushes[] = {Vec2(1, 0), Vec2(-1, 0), Vec2(0, 1), Vec2(0, -1), Vec2(0.6f, 0.8f), Vec2(-0.8f, -0.6f)};
+  const float amounts[] = {1.0f, 0.6f};  // all the way; half way after the dead zone
+  for (Perspective perspective : perspectives) {
+    const std::unique_ptr<View> view = make_view(perspective);
+    const Camera camera = test_camera(*view);
+    headless::HeadlessBackend backend;
+    backend.input().connect_gamepad(true);
+    Controls controls;
+    for (Vec2 push : pushes) {
+      for (float amount : amounts) {
+        backend.input().set_axis(GamepadAxis::kLeftX, push.x * amount);
+        backend.input().set_axis(GamepadAxis::kLeftY, push.y * amount);
+        const Vec2 ground = move_of(frame_and_tick(backend, controls, *view));
+        const float expected = (amount - Controls::kStickDeadZone) / (1.0f - Controls::kStickDeadZone);
+        Vec2 screen = push;
+        if (perspective == Perspective::kSide) {
+          // Only left/right exist on the side view's ground, and only the
+          // sideways part of the push counts: up alone does not walk.
+          CHECK(ground.y == 0.0f);
+          CHECK_NEAR(std::fabs(ground.x), std::fabs(push.x) * expected, 1e-4);
+          if (push.x == 0.0f) continue;
+          screen = Vec2(push.x, 0.0f);
+        } else {
+          CHECK_NEAR(length(ground), expected, 1e-4);
+        }
+        CHECK(length(ground) <= 1.0f + 1e-6f);
+        const Vec3 origin(3.0f, 3.0f, 1.0f);
+        const Vec2 s0 = view->world_to_screen(origin, camera);
+        const Vec2 s1 = view->world_to_screen(origin + Vec3(ground.x, ground.y, 0.0f), camera);
+        const Vec2 moved = s1 - s0;
+        const float cross = moved.x * screen.y - moved.y * screen.x;
+        const float dot = moved.x * screen.x + moved.y * screen.y;
+        CHECK_NEAR(cross / length(moved), 0.0f, 1e-2);
+        CHECK(dot > 0.0f);
+      }
+    }
+    // A held key wins over the stick: D walks right at full speed even with
+    // the stick pushed left.
+    backend.input().set_axis(GamepadAxis::kLeftX, -1.0f);
+    backend.input().set_axis(GamepadAxis::kLeftY, 0.0f);
+    backend.input().press(Key::kD);
+    const Vec2 keyed = move_of(frame_and_tick(backend, controls, *view));
+    CHECK(keyed == view->screen_to_ground_direction(Vec2(1.0f, 0.0f)));
+    backend.input().release(Key::kD);
+  }
+}
+
+// The d-pad is WASD: the same Move for every combination in every view, and
+// in the side view d-pad up jumps like W.
+void dpad_equals_wasd(test::Context& ctx) {
+  const Perspective perspectives[] = {Perspective::kTopDown, Perspective::kSide, Perspective::kIsometric};
+  const Key keys[4] = {Key::kW, Key::kA, Key::kS, Key::kD};
+  const GamepadButton dpad[4] = {GamepadButton::kDpadUp, GamepadButton::kDpadLeft, GamepadButton::kDpadDown,
+                                 GamepadButton::kDpadRight};
+  for (Perspective perspective : perspectives) {
+    const std::unique_ptr<View> view = make_view(perspective);
+    for (int mask = 0; mask < 16; ++mask) {
+      headless::HeadlessBackend by_keys;
+      headless::HeadlessBackend by_pad;
+      by_pad.input().connect_gamepad(true);
+      for (int i = 0; i < 4; ++i) {
+        if ((mask & (1 << i)) == 0) continue;
+        by_keys.input().press(keys[i]);
+        by_pad.input().press(dpad[i]);
+      }
+      Controls key_controls;
+      Controls pad_controls;
+      const CommandList a = frame_and_tick(by_keys, key_controls, *view);
+      const CommandList b = frame_and_tick(by_pad, pad_controls, *view);
+      CHECK(a.size() == b.size());
+      for (std::size_t i = 0; i < a.size() && i < b.size(); ++i) {
+        CHECK(a[i].type == b[i].type && a[i].vec == b[i].vec);
+      }
+      // Up jumps exactly where W does (only the side view).
+      const bool jumps = (mask & 1) != 0 && perspective == Perspective::kSide;
+      CHECK(count_type(b, CommandType::kJump) == (jumps ? 1 : 0));
+    }
+  }
+}
+
+// South jumps, and a bound gamepad button sends its command; a tap between
+// two ticks (pressed and released before the tick runs) is sent exactly once,
+// and a held button is not repeated.
+void gamepad_tap_between_ticks_is_emitted_once(test::Context& ctx) {
+  headless::HeadlessBackend backend;
+  headless::HeadlessInput& input = backend.input();
+  const std::unique_ptr<View> view = make_view(Perspective::kTopDown);
+  const CommandType drop = game_command(4);
+  Controls controls;
+  CHECK(controls.bind(GamepadButton::kWest, drop));
+  input.connect_gamepad(true);
+
+  // Frame 1: south and west go down. Frame 2: both come up. Then the tick.
+  input.press(GamepadButton::kSouth);
+  input.press(GamepadButton::kWest);
+  backend.window().pump_events();
+  controls.sample(input);
+  input.release(GamepadButton::kSouth);
+  input.release(GamepadButton::kWest);
+  backend.window().pump_events();
+  controls.sample(input);
+  CommandList out;
+  controls.emit(*view, view->movement_rules(), 1, out);
+  CHECK(count_type(out, CommandType::kJump) == 1);
+  CHECK(count_type(out, drop) == 1);
+  CHECK(controls.jumped());
+  out.clear();
+  controls.emit(*view, view->movement_rules(), 1, out);  // the next tick: gone
+  CHECK(count_type(out, CommandType::kJump) == 0 && count_type(out, drop) == 0);
+
+  // A tap inside a single frame counts too.
+  input.press(GamepadButton::kWest);
+  input.release(GamepadButton::kWest);
+  out = frame_and_tick(backend, controls, *view, 1);
+  CHECK(count_type(out, drop) == 1);
+
+  // Two ticks in one frame: the press goes with the first one only.
+  input.press(GamepadButton::kSouth);
+  backend.window().pump_events();
+  controls.sample(input);
+  out.clear();
+  controls.emit(*view, view->movement_rules(), 1, out);
+  controls.emit(*view, view->movement_rules(), 1, out);
+  CHECK(count_type(out, CommandType::kJump) == 1);
+  // Held over more frames: still that one jump.
+  for (int frame = 0; frame < 3; ++frame) {
+    CHECK(count_type(frame_and_tick(backend, controls, *view, 1), CommandType::kJump) == 0);
+  }
+  input.release(GamepadButton::kSouth);
+}
+
+// A gamepad binding sends its command (with the player); bindings share the
+// slots, an invalid button is refused, and clear_bindings drops it.
+void gamepad_binding_emits_its_command(test::Context& ctx) {
+  headless::HeadlessBackend backend;
+  headless::HeadlessInput& input = backend.input();
+  const std::unique_ptr<View> view = make_view(Perspective::kIsometric);
+  const CommandType pad_command = game_command(11);
+  const CommandType key_command = game_command(12);
+  Controls controls;
+  CHECK(controls.bind(Key::kE, key_command));
+  CHECK(controls.bind(GamepadButton::kRightShoulder, pad_command));
+  CHECK(!controls.bind(GamepadButton::kCount, pad_command));
+  input.connect_gamepad(true);
+
+  input.press(GamepadButton::kRightShoulder);
+  CommandList out = frame_and_tick(backend, controls, *view, 5);
+  CHECK(count_type(out, pad_command) == 1 && count_type(out, key_command) == 0);
+  for (const Command& command : out) {
+    if (command.type == pad_command) CHECK(command.player == 5);
+  }
+  input.release(GamepadButton::kRightShoulder);
+  // The key binding is not set off by the pad, nor the pad binding by the key.
+  input.press(Key::kE);
+  out = frame_and_tick(backend, controls, *view, 5);
+  CHECK(count_type(out, pad_command) == 0 && count_type(out, key_command) == 1);
+  input.release(Key::kE);
+
+  // Swapped game code: the binding is gone, latched presses too.
+  input.press(GamepadButton::kRightShoulder);
+  backend.window().pump_events();
+  controls.sample(input);
+  controls.clear_bindings();
+  out.clear();
+  controls.emit(*view, view->movement_rules(), 5, out);
+  CHECK(count_type(out, pad_command) == 0);
+  input.release(GamepadButton::kRightShoulder);
+
+  // Keys, mouse and gamepad buttons share kMaxBindings slots.
+  Controls full;
+  for (std::size_t i = 0; i < Controls::kMaxBindings; ++i) {
+    const CommandType type = game_command(static_cast<std::uint16_t>(i));
+    CHECK(i % 3 == 0 ? full.bind(Key::kE, type)
+                     : (i % 3 == 1 ? full.bind(MouseButton::kRight, type) : full.bind(GamepadButton::kNorth, type)));
+  }
+  CHECK(!full.bind(GamepadButton::kSouth, pad_command));
+}
+
+// A pad plugged in while the game runs works from the next frame; before it,
+// and after it is pulled out, nothing it did moves or sends anything.
+void gamepad_connected_mid_game(test::Context& ctx) {
+  headless::HeadlessBackend backend;
+  headless::HeadlessInput& input = backend.input();
+  const std::unique_ptr<View> view = make_view(Perspective::kSide);
+  const CommandType drop = game_command(2);
+  Controls controls;
+  CHECK(controls.bind(GamepadButton::kWest, drop));
+
+  // Keyboard play, no pad.
+  for (int tick = 0; tick < 5; ++tick) {
+    input.press(Key::kD);
+    const CommandList out = frame_and_tick(backend, controls, *view);
+    CHECK(move_of(out) == Vec2(1.0f, 0.0f));
+  }
+  input.release(Key::kD);
+  // Pressing on an unplugged pad does nothing.
+  input.press(GamepadButton::kSouth);
+  input.set_axis(GamepadAxis::kLeftX, -1.0f);
+  CommandList out = frame_and_tick(backend, controls, *view);
+  CHECK(move_of(out) == Vec2() && count_type(out, CommandType::kJump) == 0);
+
+  // Plugged in: the stick walks left, south jumps, west drops.
+  input.connect_gamepad(true);
+  input.set_axis(GamepadAxis::kLeftX, -1.0f);
+  input.press(GamepadButton::kSouth);
+  input.press(GamepadButton::kWest);
+  out = frame_and_tick(backend, controls, *view);
+  CHECK_NEAR(move_of(out).x, -1.0f, 1e-6);
+  CHECK(count_type(out, CommandType::kJump) == 1);
+  CHECK(count_type(out, drop) == 1);
+  input.release(GamepadButton::kSouth);
+  input.release(GamepadButton::kWest);
+  CHECK_NEAR(move_of(frame_and_tick(backend, controls, *view)).x, -1.0f, 1e-6);
+
+  // Pulled out with the stick still pushed: the player stops.
+  input.connect_gamepad(false);
+  out = frame_and_tick(backend, controls, *view);
+  CHECK(move_of(out) == Vec2());
+  CHECK(count_type(out, CommandType::kJump) == 0 && count_type(out, drop) == 0);
+  // And the keyboard still works.
+  input.press(Key::kA);
+  CHECK(move_of(frame_and_tick(backend, controls, *view)) == Vec2(-1.0f, 0.0f));
+}
+
 }  // namespace
 
 void bundled_sounds_load_in_every_scene(test::Context& ctx) {
@@ -724,4 +1083,12 @@ void register_view_tests(test::Registry& registry) {
   registry.add("views.screen_to_world_known_points", screen_to_world_known_points);
   registry.add("platform.headless_pointer_latches_per_frame", headless_pointer_latches_per_frame);
   registry.add("controls.click_is_emitted_once", click_is_emitted_once);
+  registry.add("platform.headless_gamepad_latches_per_frame", headless_gamepad_latches_per_frame);
+  registry.add("controls.stick_dead_zone_is_radial_and_rescaled", stick_dead_zone_is_radial_and_rescaled);
+  registry.add("controls.stick_moves_the_way_it_is_pushed_in_every_view",
+               stick_moves_the_way_it_is_pushed_in_every_view);
+  registry.add("controls.dpad_equals_wasd", dpad_equals_wasd);
+  registry.add("controls.gamepad_tap_between_ticks_is_emitted_once", gamepad_tap_between_ticks_is_emitted_once);
+  registry.add("controls.gamepad_binding_emits_its_command", gamepad_binding_emits_its_command);
+  registry.add("controls.gamepad_connected_mid_game", gamepad_connected_mid_game);
 }

@@ -1,5 +1,7 @@
 #include "backends/headless/headless_backend.h"
 
+#include <cmath>
+
 namespace scraps::headless {
 
 bool HeadlessInput::is_down(Key key) const {
@@ -62,6 +64,61 @@ void HeadlessInput::release(MouseButton button) {
 
 void HeadlessInput::scroll(float notches) { m_pending_wheel += notches; }
 
+bool HeadlessInput::is_down(GamepadButton button) const {
+  const std::size_t i = slot(button);
+  return i < m_pad_down.size() && m_pad_down[i];
+}
+
+bool HeadlessInput::was_pressed(GamepadButton button) const {
+  const std::size_t i = slot(button);
+  return i < m_pad_pressed.size() && m_pad_pressed[i];
+}
+
+bool HeadlessInput::was_released(GamepadButton button) const {
+  const std::size_t i = slot(button);
+  return i < m_pad_released.size() && m_pad_released[i];
+}
+
+float HeadlessInput::axis(GamepadAxis axis) const {
+  const std::size_t i = slot(axis);
+  return i < m_axes.size() ? m_axes[i] : 0.0f;
+}
+
+void HeadlessInput::connect_gamepad(bool connected) {
+  if (!connected) {
+    // Like a real pad pulled out: whatever was held is let go, silently (no
+    // "released" either, there is no pad left to have released it).
+    m_pending_pad_down.fill(false);
+    m_pending_pad_pressed.fill(false);
+    m_pending_pad_released.fill(false);
+    m_pending_axes.fill(0.0f);
+  }
+  m_pending_pad_connected = connected;
+}
+
+void HeadlessInput::press(GamepadButton button) {
+  const std::size_t i = slot(button);
+  if (!m_pending_pad_connected || i >= m_pending_pad_down.size()) return;
+  if (!m_pending_pad_down[i]) m_pending_pad_pressed[i] = true;
+  m_pending_pad_down[i] = true;
+}
+
+void HeadlessInput::release(GamepadButton button) {
+  const std::size_t i = slot(button);
+  if (!m_pending_pad_connected || i >= m_pending_pad_down.size()) return;
+  if (m_pending_pad_down[i]) m_pending_pad_released[i] = true;
+  m_pending_pad_down[i] = false;
+}
+
+void HeadlessInput::set_axis(GamepadAxis axis, float value) {
+  const std::size_t i = slot(axis);
+  if (!m_pending_pad_connected || i >= m_pending_axes.size()) return;
+  const bool trigger = axis == GamepadAxis::kLeftTrigger || axis == GamepadAxis::kRightTrigger;
+  const float low = trigger ? 0.0f : -1.0f;
+  if (!std::isfinite(value)) value = 0.0f;
+  m_pending_axes[i] = value < low ? low : (value > 1.0f ? 1.0f : value);
+}
+
 void HeadlessInput::begin_frame() {
   m_pressed = m_pending_pressed;
   m_pending_pressed.fill(false);
@@ -75,6 +132,15 @@ void HeadlessInput::begin_frame() {
   m_pending_button_released.fill(false);
   m_wheel = m_pending_wheel;
   m_pending_wheel = 0.0f;
+  // The gamepad, the same way: a tap inside one frame is both pressed and
+  // released in it. Held buttons and axes carry over.
+  m_pad_connected = m_pending_pad_connected;
+  m_pad_down = m_pending_pad_down;
+  m_pad_pressed = m_pending_pad_pressed;
+  m_pad_released = m_pending_pad_released;
+  m_pending_pad_pressed.fill(false);
+  m_pending_pad_released.fill(false);
+  m_axes = m_pending_axes;
 }
 
 void HeadlessWindow::pump_events() {

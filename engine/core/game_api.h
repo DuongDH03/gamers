@@ -48,15 +48,18 @@
 namespace scraps {
 
 // Bump when GameApi, GameBinding or SoundEvents change shape or meaning.
-constexpr std::uint32_t kGameApiVersion = 1;
+// History: 1 = first version; 2 = GameBinding can name a gamepad button.
+constexpr std::uint32_t kGameApiVersion = 2;
 
-// One input binding of a game: a key or a mouse button sends `command`.
-// A key binding has button == MouseButton::kCount; a mouse binding has
-// key == Key::kUnknown. Use key_binding() / button_binding().
+// One input binding of a game: a key, a mouse button or a gamepad button
+// sends `command`. Exactly one of the three is set; the others keep their
+// "none" value (Key::kUnknown, MouseButton::kCount, GamepadButton::kCount).
+// Use key_binding() / button_binding() / pad_binding().
 struct GameBinding {
   Key key = Key::kUnknown;
   MouseButton button = MouseButton::kCount;
   CommandType command = CommandType::kNone;
+  GamepadButton pad = GamepadButton::kCount;
 };
 
 constexpr GameBinding key_binding(Key key, CommandType command) {
@@ -69,6 +72,13 @@ constexpr GameBinding key_binding(Key key, CommandType command) {
 constexpr GameBinding button_binding(MouseButton button, CommandType command) {
   GameBinding binding;
   binding.button = button;
+  binding.command = command;
+  return binding;
+}
+
+constexpr GameBinding pad_binding(GamepadButton pad, CommandType command) {
+  GameBinding binding;
+  binding.pad = pad;
   binding.command = command;
   return binding;
 }
@@ -260,6 +270,7 @@ constexpr std::uint64_t compute() {
   h = mix(h, sizeof(JobSystem));
 
   h = mix(h, sizeof(GameBinding));
+  h = mix(h, offsetof(GameBinding, pad));
   h = mix(h, sizeof(SoundEvents));
   h = mix(h, sizeof(GameApi));
   return h;

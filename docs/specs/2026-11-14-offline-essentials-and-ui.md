@@ -284,3 +284,88 @@ localisation.
 4. Push target: commit each part, then push to `origin/main`
    (`github.com/DuongDH03/gamers`) when everything is done. Or would you
    rather have a branch and a pull request?
+
+## Results, part 3: gamepad (2026-11-14)
+
+Built as written, with these details settled while building:
+
+- **`Input`** gained `GamepadButton` (positional: south, east, west, north,
+  d-pad, start, back, shoulders, stick clicks), `GamepadAxis` (left/right
+  x/y, triggers), `gamepad_connected()`, `is_down` / `was_pressed` /
+  `was_released` per button and `axis()`. Sticks use screen conventions
+  (x right and y down are +1), triggers 0..1, raw. A tap inside one frame is
+  both pressed and released in it, like a mouse click. No pad: every button
+  up, every axis 0.
+- **sdl3:** `SDL_INIT_GAMEPAD` is optional, like audio: if it fails the game
+  runs without a pad. A pad already plugged in when the window opens is
+  opened at once; `SDL_EVENT_GAMEPAD_ADDED` opens one if none is open;
+  removing the open pad closes it and opens another that is still connected.
+  Events from other pads are ignored. Focus lost clears the pad state, as for
+  the mouse. **Also:** on focus gained the pad's held buttons and axes are
+  read again (without "pressed"), so a stick held while switching back
+  counts. Guide, paddles, touchpad and misc buttons are ignored.
+- **headless:** `connect_gamepad(bool)`, `press/release(GamepadButton)`,
+  `set_axis(GamepadAxis, float)`, all taking effect at the next frame.
+  Presses and axes on an unplugged pad are ignored; unplugging lets go of
+  everything without a "released". Axes are clamped to their range; not
+  finite counts as 0.
+- **Controls:** the left stick goes through a radial dead zone of 0.2,
+  rescaled so the output starts at 0 at its edge
+  (`Controls::apply_dead_zone`), then through the View like WASD, scaled by
+  how far it is pushed: Move's `vec` has length ≤ 1. **Choices made here:**
+  - A held movement key or d-pad direction wins over the stick (full speed,
+    the keys' direction); the stick is used only when no direction key is
+    held. Keys and stick are not added together.
+  - Side view: only the sideways part of the push counts (the stick pushed
+    mostly up walks slowly, not at full speed). Controls finds out by asking
+    the View which screen axes have a ground direction
+    (`screen_to_ground_direction` of (1, 0) and (0, 1)), so it still knows
+    nothing about "down" (Rule 4).
+  - The d-pad is WASD, including "d-pad up jumps" in the side view, like W.
+    Pushing the stick up does not jump (it would make every slightly upward
+    push a jump). South jumps in every view, like Space.
+  - `bind(GamepadButton, CommandType)` shares the 12 slots with keys and
+    mouse buttons and is latched once per tick the same way.
+  - **Start is not wired to pause** on this branch: it is an ordinary
+    `GamepadButton::kStart`. Part 4 owns pause and connects it at the merge.
+- **`GameApi` version 2:** `GameBinding` gained a `pad` field (last, so the
+  first three fields keep their places) and `pad_binding()`. A binding names
+  exactly one of key, mouse button and gamepad button, each in range; the
+  apps check that (`check_game_api`), install it into Controls and compare it
+  when deciding whether a reload needs a rebind. A version 1 module is
+  refused with the usual message ("built against another engine (game API
+  version 1, this program has 2)"). The layout hash also mixes
+  `offsetof(GameBinding, pad)`.
+- **Sandbox:** west (X on Xbox, Square on PlayStation) drops a coin. The
+  test marker module got the same binding.
+- **Client:** Controls get the pad through `Input` as before (nothing else to
+  pass); the HUD says "gamepad connected" (or "disconnected") for 3 s when the
+  pad comes or goes, and prints it on the console too. The help line and
+  `--help` name the pad controls. The headless autopilot plugs a pad in from
+  frame 450 to 569 (stick circling, south at 470, west at 500), so every
+  `client_offline_*` smoke test runs the pad path. Movement keys are held all
+  through the autopilot, so the stick does not change where the walk ends.
+- **Tests** (98 → 106 test functions; still 23 CTest tests):
+  `platform.headless_gamepad_latches_per_frame`,
+  `controls.stick_dead_zone_is_radial_and_rescaled`,
+  `controls.stick_moves_the_way_it_is_pushed_in_every_view` (full and half
+  push, six directions, three views, and keys win over the stick),
+  `controls.dpad_equals_wasd` (all 16 combinations, three views),
+  `controls.gamepad_tap_between_ticks_is_emitted_once`,
+  `controls.gamepad_binding_emits_its_command`,
+  `controls.gamepad_connected_mid_game`,
+  `game.gamepad_bindings_are_checked_and_installed`. `game.mismatch_is_refused`
+  has a third refused module that claims version 1 and checks the message
+  names it. `no_allocation_in_hot_path` also samples a pad (stick across the
+  dead zone, south and west pressed now and then): still 0 allocations.
+
+Not verified: the `sdl3` gamepad with a real controller. Only the headless
+path ran. To check by hand (`scraps_client`, any scene): plug a pad in while
+the game runs (HUD: "gamepad connected"); the left stick walks in the
+direction pushed in all three views (V switches), slowly when pushed a
+little, not at all when resting; the d-pad walks like WASD; A / Cross jumps;
+X / Square drops a coin when you hold one; in the side view d-pad up jumps.
+Switch to another window while holding the stick and come back: the player
+must not keep walking after you let go. Unplug the pad (HUD: "gamepad
+disconnected", the player stops); with two pads, unplug the one in use and
+the other takes over.

@@ -19,11 +19,13 @@ struct SDL_Renderer;
 struct SDL_AudioStream;
 struct SDL_Texture;
 struct SDL_Vertex;
+struct SDL_Gamepad;
 
 namespace scraps::sdl3 {
 
 // The real backend for players: one SDL window with an SDL_Renderer, the
-// keyboard, and an audio stream. Implements all four platform interfaces.
+// keyboard, mouse and first connected gamepad, and an audio stream.
+// Implements all four platform interfaces.
 class Sdl3Platform final : public Window, public Input, public Renderer2D, public Audio {
   struct Passkey {
     explicit Passkey() = default;
@@ -56,6 +58,11 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   bool was_pressed(MouseButton button) const override;
   bool was_released(MouseButton button) const override;
   float wheel() const override { return m_wheel; }
+  bool gamepad_connected() const override { return m_pad != nullptr; }
+  bool is_down(GamepadButton button) const override;
+  bool was_pressed(GamepadButton button) const override;
+  bool was_released(GamepadButton button) const override;
+  float axis(GamepadAxis axis) const override;
 
   // Renderer2D
   TextureId create_texture(int width, int height, const std::uint8_t* rgba) override;
@@ -77,6 +84,12 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   void set_draw_color(Color color);
   // Window points (from an event) to renderer output pixels.
   void set_pointer(float window_x, float window_y);
+  // Opens the first connected gamepad if none is open. Returns true if one is open afterwards.
+  bool open_any_gamepad();
+  // Takes the open pad's current buttons and axes (no "pressed" for what is already held).
+  void read_gamepad_state();
+  void close_gamepad();
+  void clear_gamepad_state();
 
   SDL_Window* m_window = nullptr;
   SDL_Renderer* m_renderer = nullptr;
@@ -90,6 +103,15 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   std::array<bool, kButtons> m_button_pressed{};
   std::array<bool, kButtons> m_button_released{};
   float m_wheel = 0.0f;
+  // The gamepad being read (the first one connected), or nullptr.
+  static constexpr std::size_t kPadButtons = static_cast<std::size_t>(GamepadButton::kCount);
+  static constexpr std::size_t kPadAxes = static_cast<std::size_t>(GamepadAxis::kCount);
+  SDL_Gamepad* m_pad = nullptr;
+  std::uint32_t m_pad_id = 0;  // its SDL_JoystickID
+  std::array<bool, kPadButtons> m_pad_down{};
+  std::array<bool, kPadButtons> m_pad_pressed{};
+  std::array<bool, kPadButtons> m_pad_released{};
+  std::array<float, kPadAxes> m_axes{};
   std::vector<SDL_Vertex> m_vertices;  // reused conversion buffer
   std::vector<SDL_Texture*> m_textures;  // index = TextureId - 1; nullptr once destroyed
 };
