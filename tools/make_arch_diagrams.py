@@ -265,15 +265,15 @@ s.text(525, 98, 'one thread: touches shared lists', 'ts', 'middle')
 s.save(OUT, 'arch-jobs.svg')
 
 # ---------------------------------------------------------------- 7. performance
-s = Svg(350, 'Where frame time goes', 'Crowd scene, 1,001 entities: all steps together take about 1.6 ms of the 16.7 ms frame budget.')
+s = Svg(350, 'Where frame time goes', 'Crowd scene, 1,001 entities: all steps together take about 1 ms of the 16.7 ms frame budget.')
 s.text(40, 30, 'The 16.7 ms frame budget at 60 Hz', 'th')
 s.add('<g class="gray"><rect class="f" x="40" y="44" width="600" height="22" rx="4"/></g>')
-s.add('<g class="purple"><rect class="ff" x="40" y="44" width="56" height="22" rx="4"/></g>')
-s.text(104, 55, 'everything below ≈ 1.6 ms (9%)', 'ts')
+s.add('<g class="purple"><rect class="ff" x="40" y="44" width="36" height="22" rx="4"/></g>')
+s.text(84, 55, 'everything below ≈ 1 ms (6%)', 'ts')
 s.text(40, 100, 'Zoomed in, crowd scene (1,001 entities)', 'th')
-rows = [('simulate, 1 thread', 0.24), ('simulate, 8 threads', 0.13), ('copy World', 0.004),
-        ('serialize full (91 KB)', 0.55), ('delta encode (~14 KB)', 0.1), ('delta decode', 0.03),
-        ('draw iso + shadows', 0.6)]
+rows = [('simulate, 1 thread', 0.15), ('simulate, 8 threads', 0.08), ('copy World', 0.002),
+        ('serialize full (91 KB)', 0.35), ('delta encode (~14 KB)', 0.06), ('delta decode', 0.017),
+        ('draw iso + shadows', 0.39)]
 for i, (label, v) in enumerate(rows):
     y = 122 + i * 28
     s.text(200, y + 8, label, 'ts', 'end')

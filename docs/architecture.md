@@ -693,32 +693,35 @@ Input   ◄── keys, mouse, wheel, text (only while playing; never Esc) ◄ p
 
 ## 7. Where time and memory go
 
-`scraps_bench` measures it (crowd scene, 1,001 entities, MinGW Release build
-on the development machine, Core i5-1135G7, GCC 13.1, 2026-11-12, game linked
-statically; your numbers will differ):
+`scraps_bench` measures it (crowd scene, 1,001 entities; MinGW Release,
+`release-mingw` preset, game linked statically; Core i5-1135G7, GCC 13.1;
+2026-11-14, commit `e1db360`; machine idle, at most 6% CPU. With other builds
+running, expect about twice these averages. Your numbers will differ):
 
-![All steps together take about 1.6 ms of the 16.7 ms frame budget](images/arch-performance.svg)
+![All steps together take about 1 ms of the 16.7 ms frame budget](images/arch-performance.svg)
 
 | Step | avg |
 |---|---|
-| simulate, 1 thread | ~0.24 ms |
-| simulate, 8 threads | ~0.10 to 0.13 ms |
-| copy World (previous = current) | ~0.004 ms |
-| serialize full snapshot (91 KB) | ~0.55 ms |
-| delta snapshot, encode / decode (~14 KB, 6 ticks behind) | ~0.10 ms / ~0.03 ms |
-| View::draw, isometric, textured, with shadows (CPU side) | ~0.60 ms (0.21 ms before shadows) |
-| View::draw, side, textured, with shadows | ~0.30 ms, 1,151 batches |
-| View::draw, top-down, textured, with shadows | ~0.22 ms, 3 batches |
+| simulate, 1 thread | ~0.15 ms |
+| simulate, 8 threads | ~0.08 ms |
+| copy World (previous = current) | ~0.002 ms |
+| serialize full snapshot (91 KB) | ~0.35 ms |
+| delta snapshot, encode / decode (~14 KB, 6 ticks behind) | ~0.06 ms / ~0.017 ms |
+| View::draw, isometric, textured, with shadows (CPU side) | ~0.39 ms, 1,199 batches |
+| View::draw, side, textured, with shadows | ~0.19 ms, 1,115 batches |
+| View::draw, top-down, textured, with shadows | ~0.14 ms, 3 batches |
+| mixing music, per frame (~16.7 ms of audio) | ~0.012 ms (60 ms at once: ~0.04 ms) |
+| `scraps_web` frame, isometric (record, encode, copy into the shared slot) | ~0.73 ms, 0.66 MB (all 1,001 on screen: ~1.4 ms, 1.25 MB) |
 
-Everything together (one thread) is about 9% of the 16.667 ms frame budget.
-These were measured after the mouse and hot-reload work, with other programs
-using about a third of the CPU. Simulate, serialize and delta are about 60%
-above the earlier figures (~0.15 / 0.35 / 0.06 ms), which were taken before
-entities gained `facing`. The bench doesn't touch the new mouse or module
-code, so `facing` or the background load is the likelier cause; a re-run on
-an idle machine would settle it. A headless `--hot-game` client showed no
-measurable per-tick cost from calling `simulate` in a DLL (startup +~40 ms
-for copying and loading the module).
+Everything together (one thread) is about 6% of the 16.667 ms frame budget
+(~0.96 ms). The 2026-11-12 numbers, about 60% higher, were taken with other
+builds running: the older code, re-run idle on the same machine, gives the
+same figures as above, so it was background load, not `facing`. The crowd's
+batch counts moved slightly because the random seed follows the scene file's
+hash, and `crowd.scene` gained a `music` line. In `scraps_web`, recording the
+vertices is 90% of a frame's native cost; encoding and copying are under
+0.11 ms. A headless `--hot-game` client shows no measurable per-tick cost from
+calling `simulate` in a DLL (+~40 ms at startup).
 Shadows cost the most new time: in side and isometric views each shadow sits
 between two sprites in painter's order, so the crowd scene needs about 1,200
 batches instead of about 120 (top-down groups them into one). The threads
