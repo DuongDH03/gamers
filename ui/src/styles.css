@@ -1,0 +1,647 @@
+/* Scraps UI: "scrapyard tags". Ink panels, bone text, a safety-amber accent
+   and hazard-stripe details. System fonts only (the game runs offline):
+   Bahnschrift ships with Windows 10 and 11. */
+
+:root {
+  --ink: #11131b;
+  --ink-2: #1a1d28;
+  --panel: rgba(15, 17, 25, 0.88);
+  --scrim: rgba(8, 9, 14, 0.62);
+  --bone: #efe8d8;
+  --bone-dim: #b8b1a2;
+  --line: rgba(239, 232, 216, 0.2);
+  --amber: #ffb627;
+  --amber-deep: #d98a00;
+  --teal: #43d3bf;
+  --rust: #e2683c;
+  --shadow-hard: 0.3rem 0.3rem 0 rgba(0, 0, 0, 0.55);
+  --radius: 0.22rem;
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-display: 'Bahnschrift', 'DIN Alternate', 'Segoe UI Variable Display', 'Arial Narrow',
+    system-ui, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --hazard: repeating-linear-gradient(
+    -45deg,
+    var(--amber) 0 0.45rem,
+    var(--ink) 0.45rem 0.9rem
+  );
+
+  color-scheme: dark;
+  /* 16px at 1280 wide, growing to 22px on large screens. */
+  font-size: clamp(15px, 0.55vw + 9px, 22px);
+  font-family: var(--font-ui);
+  color: var(--bone);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0d0f15;
+}
+
+/* ---- Layers: the world canvas under everything, the UI on top ---------- */
+
+#world {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  z-index: 0;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  /* Click-through: only controls (and menu screens) take the pointer. */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.app,
+.screen {
+  position: absolute;
+  inset: 0;
+}
+
+/* Menus own the pointer; the HUD doesn't. */
+.screen--main,
+.screen--overlay {
+  pointer-events: auto;
+}
+
+.screen--hud {
+  pointer-events: none;
+}
+
+/* ---- Main menu ---------------------------------------------------------- */
+
+.screen--main {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(10, 11, 16, 0.94) 0%,
+      rgba(10, 11, 16, 0.8) 34%,
+      rgba(10, 11, 16, 0.25) 70%,
+      rgba(10, 11, 16, 0.05) 100%
+    ),
+    repeating-linear-gradient(-45deg, transparent 0 1.4rem, rgba(255, 255, 255, 0.025) 1.4rem 1.5rem);
+}
+
+.main-layout {
+  position: absolute;
+  left: clamp(2rem, 8vw, 9rem);
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(24rem, 80vw);
+  animation: rise 0.24s ease-out both;
+}
+
+.brand {
+  margin-bottom: 2.2rem;
+}
+
+.brand__kicker {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+.brand__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(3.2rem, 5.4vw, 6rem);
+  line-height: 0.9;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--bone);
+  text-shadow:
+    0.05em 0.05em 0 var(--ink),
+    0.09em 0.09em 0 rgba(226, 104, 60, 0.85);
+  overflow-wrap: anywhere;
+}
+
+.brand__rule {
+  display: block;
+  width: 5rem;
+  height: 0.4rem;
+  margin-top: 1.1rem;
+  background: var(--hazard);
+  border-radius: 0.1rem;
+}
+
+/* ---- Pause and settings: a panel over a dimmed world -------------------- */
+
+.screen--overlay {
+  display: grid;
+  place-items: center;
+  background: var(--scrim);
+  backdrop-filter: blur(6px) saturate(0.75);
+}
+
+.panel {
+  position: relative;
+  width: min(22rem, 90vw);
+  padding: 1.9rem 1.6rem 1.6rem;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow:
+    0 1.6rem 3rem rgba(0, 0, 0, 0.45),
+    0.5rem 0.5rem 0 rgba(0, 0, 0, 0.35);
+  animation: rise 0.2s ease-out both;
+}
+
+.panel::before {
+  /* hazard tape along the top edge */
+  content: '';
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  top: -2px;
+  height: 0.45rem;
+  background: var(--hazard);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.panel--wide {
+  width: min(28rem, 92vw);
+}
+
+.panel__header {
+  margin-bottom: 1.3rem;
+}
+
+.panel__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2.3rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.panel__sub {
+  margin: 0.45rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--bone-dim);
+  min-height: 1.2em;
+}
+
+/* ---- Menu buttons ------------------------------------------------------- */
+
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.menu-list--end {
+  margin-top: 1.4rem;
+}
+
+.menu-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  font: inherit;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--bone);
+  background: rgba(239, 232, 216, 0.05);
+  border: 2px solid var(--line);
+  border-left-width: 0.3rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    transform 0.12s ease,
+    box-shadow 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.menu-button__mark {
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: none;
+  border: 2px solid currentColor;
+  transform: rotate(45deg) scale(0.6);
+  opacity: 0.45;
+  transition:
+    transform 0.12s ease,
+    opacity 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.menu-button:hover:not(:disabled),
+.menu-button:focus-visible {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber-deep);
+  box-shadow: var(--shadow-hard);
+  transform: translateX(0.35rem);
+}
+
+.menu-button:hover:not(:disabled) .menu-button__mark,
+.menu-button:focus-visible .menu-button__mark {
+  opacity: 1;
+  background: var(--ink);
+  transform: rotate(45deg) scale(1);
+}
+
+.menu-button:active:not(:disabled) {
+  transform: translate(0.45rem, 0.1rem);
+  box-shadow: 0.15rem 0.15rem 0 rgba(0, 0, 0, 0.55);
+}
+
+.menu-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.menu-button--quiet:not(:hover):not(:focus-visible) {
+  color: var(--bone-dim);
+  background: transparent;
+}
+
+/* ---- Focus: always visible for keyboard and gamepad --------------------- */
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 3px solid var(--bone);
+  outline-offset: 3px;
+}
+
+.menu-button:focus-visible {
+  outline: 3px solid var(--bone);
+  outline-offset: 3px;
+}
+
+/* ---- Settings sliders --------------------------------------------------- */
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  row-gap: 0.55rem;
+}
+
+.slider__label {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.slider__value {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--amber);
+}
+
+.slider__input {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 1.6rem;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.slider__input::-webkit-slider-runnable-track {
+  height: 0.5rem;
+  border-radius: 0.1rem;
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  background: linear-gradient(
+    to right,
+    var(--amber) 0 var(--fill),
+    rgba(239, 232, 216, 0.16) var(--fill) 100%
+  );
+}
+
+.slider__input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1.5rem;
+  margin-top: -0.55rem;
+  background: var(--bone);
+  border: 2px solid var(--ink);
+  border-radius: 0.15rem;
+  box-shadow: 0.15rem 0.15rem 0 rgba(0, 0, 0, 0.5);
+}
+
+.slider__input::-moz-range-track {
+  height: 0.5rem;
+  border-radius: 0.1rem;
+  background: rgba(239, 232, 216, 0.16);
+}
+
+.slider__input::-moz-range-progress {
+  height: 0.5rem;
+  background: var(--amber);
+}
+
+.slider__input::-moz-range-thumb {
+  width: 1rem;
+  height: 1.5rem;
+  background: var(--bone);
+  border: 2px solid var(--ink);
+  border-radius: 0.15rem;
+}
+
+.slider__input:focus-visible {
+  outline: 3px solid var(--bone);
+  outline-offset: 4px;
+}
+
+.slider__input:focus-visible::-webkit-slider-thumb {
+  background: var(--amber);
+}
+
+/* ---- Key legend --------------------------------------------------------- */
+
+.key-hints {
+  position: absolute;
+  bottom: 1.6rem;
+  left: 0;
+  right: 0;
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  gap: 1.6rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  color: var(--bone-dim);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+.key-hints > span {
+  /* readable over a bright world too */
+  padding: 0.25rem 0.6rem;
+  background: rgba(10, 11, 16, 0.6);
+  border-radius: var(--radius);
+}
+
+.screen--main .key-hints {
+  justify-content: flex-start;
+  left: clamp(2rem, 8vw, 9rem);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.5em;
+  margin-right: 0.25em;
+  padding: 0.1em 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  text-align: center;
+  color: var(--bone);
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 0.2rem;
+}
+
+/* ---- HUD ---------------------------------------------------------------- */
+
+.hud-top {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  right: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.hud-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  max-width: 60vw;
+  padding: 0.45rem 0.9rem 0.45rem 0.75rem;
+  background: rgba(12, 13, 19, 0.8);
+  border: 2px solid rgba(239, 232, 216, 0.22);
+  border-left: 0.35rem solid var(--amber);
+  border-radius: var(--radius);
+  box-shadow: 0.2rem 0.2rem 0 rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+}
+
+.hud-chip__game {
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+.hud-chip__text {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-button {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.05rem;
+  font: inherit;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--bone);
+  background: rgba(12, 13, 19, 0.82);
+  border: 2px solid rgba(239, 232, 216, 0.3);
+  border-radius: var(--radius);
+  box-shadow: 0.2rem 0.2rem 0 rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    transform 0.08s ease,
+    box-shadow 0.08s ease;
+}
+
+.hud-button:hover {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber-deep);
+}
+
+.hud-button:active {
+  transform: translate(0.1rem, 0.1rem);
+  box-shadow: 0.08rem 0.08rem 0 rgba(0, 0, 0, 0.5);
+}
+
+.hud-button--icon {
+  width: 2.7rem;
+  height: 2.7rem;
+  padding: 0;
+}
+
+.pause-icon {
+  display: block;
+  width: 0.85rem;
+  height: 1rem;
+  border-left: 0.28rem solid currentColor;
+  border-right: 0.28rem solid currentColor;
+}
+
+.hud-online {
+  padding: 0.3rem 0.7rem;
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--teal);
+  border-radius: var(--radius);
+  box-shadow: 0.15rem 0.15rem 0 rgba(0, 0, 0, 0.45);
+}
+
+.hud-commands {
+  position: absolute;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* ---- Notice ------------------------------------------------------------- */
+
+.notice-area {
+  position: absolute;
+  top: 4.6rem;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.notice {
+  margin: 0;
+  padding: 0.55rem 1.3rem;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--amber);
+  border: 2px solid var(--amber-deep);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  /* Matches NOTICE_MS in App.tsx: in, hold, fade out by 2 s. */
+  animation: notice-life 2s ease forwards;
+}
+
+/* ---- Waiting for the first view ----------------------------------------- */
+
+.waiting {
+  position: absolute;
+  left: 50%;
+  bottom: 2rem;
+  transform: translateX(-50%);
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+  text-shadow: 0 1px 0 #000;
+}
+
+/* ---- Motion ------------------------------------------------------------- */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    translate: 0 0.6rem;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes notice-life {
+  0% {
+    opacity: 0;
+    translate: 0 -0.5rem;
+  }
+  10% {
+    opacity: 1;
+    translate: 0 0;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .menu-button:hover:not(:disabled),
+  .menu-button:focus-visible {
+    transform: none;
+  }
+}
