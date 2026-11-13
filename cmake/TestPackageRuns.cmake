@@ -4,11 +4,18 @@
 # the install makes the programs fail to start, and so the test.
 #
 #   cmake -DBUILD_DIR=<build> -DCONFIG=<Release> -DWORK_DIR=<scratch> [-DEXPECT_WEB=ON]
-#         [-DEXPECT_WEBVIEW2_LOADER=ON] -P TestPackageRuns.cmake
+#         [-DEXPECT_WEBVIEW2_LOADER=ON] [-DEXPECT_LICENSES=SDL3.txt,WebView2.txt]
+#         -P TestPackageRuns.cmake
+#   cmake -DBUILD_DIR=<build> -DCONFIG=<Release> -DWORK_DIR=<scratch> -DRUN_WEB=ON -P TestPackageRuns.cmake
 #
 # With EXPECT_WEB, the release must also hold scraps_web.exe and the built UI
 # (ui/index.html and its assets); with EXPECT_WEBVIEW2_LOADER (MinGW), the
-# WebView2Loader.dll it loads.
+# WebView2Loader.dll it loads; with EXPECT_LICENSES, those files in licenses/.
+#
+# RUN_WEB (ctest package_web_runs, label `window`): instead of the client and
+# the server, start the installed scraps_web --self-test from a non-ASCII
+# folder. It prints "scraps_web self-test: skipped" when it cannot run here
+# (no WebView2 runtime, no desktop), which ctest counts as skipped.
 
 foreach(var BUILD_DIR WORK_DIR)
   if(NOT ${var})
@@ -50,6 +57,18 @@ endif()
 if(EXPECT_WEBVIEW2_LOADER AND NOT EXISTS "${prefix}/WebView2Loader.dll")
   message(FATAL_ERROR "the install has no WebView2Loader.dll")
 endif()
+if(EXPECT_LICENSES)
+  string(REPLACE "," ";" licenses "${EXPECT_LICENSES}")
+  foreach(file IN LISTS licenses)
+    if(NOT EXISTS "${prefix}/licenses/${file}")
+      message(FATAL_ERROR "the install has no licenses/${file}")
+    endif()
+    file(SIZE "${prefix}/licenses/${file}" size)
+    if(size LESS 100)
+      message(FATAL_ERROR "the install's licenses/${file} is not a licence (${size} bytes)")
+    endif()
+  endforeach()
+endif()
 file(GLOB scenes "${prefix}/scenes/*.scene")
 if(NOT scenes)
   message(FATAL_ERROR "the install's scenes/ folder has no .scene file")
@@ -68,6 +87,34 @@ if(NOT windows)
 endif()
 file(TO_NATIVE_PATH "${windows}" windows)
 set(ENV{PATH} "${windows}\\System32;${windows}")
+
+if(RUN_WEB)
+  if(NOT EXISTS "${prefix}/scraps_web.exe")
+    message(FATAL_ERROR "the install has no scraps_web.exe")
+  endif()
+  # A folder whose name is not ASCII, as below for the client.
+  set(folder "${WORK_DIR}/Phương 模块")
+  file(COPY "${prefix}/" DESTINATION "${folder}")
+  execute_process(COMMAND "${folder}/scraps_web.exe" --self-test --save-dir "${WORK_DIR}/saves"
+                          --user-data-dir "${WORK_DIR}/webview2-profile"
+                  WORKING_DIRECTORY "${elsewhere}"
+                  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output
+                  ENCODING UTF-8 TIMEOUT 200)
+  message(STATUS "scraps_web in ${folder}:\n${output}")
+  if(result EQUAL 77)
+    message(STATUS "scraps_web self-test: skipped (no WebView2 runtime, or no desktop to draw on)")
+    return()
+  endif()
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "scraps_web installed in ${folder} failed (${result}); a DLL or the UI may be missing")
+  endif()
+  # Its UI must be the installed one, not the build's.
+  string(FIND "${output}" "UI from ${folder}" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "scraps_web installed in ${folder} did not take its UI from ${folder}/ui")
+  endif()
+  return()
+endif()
 
 # run_installed(<folder>): the client and the server installed in <folder>
 # start, from another working folder, and take their scenes from it. Output

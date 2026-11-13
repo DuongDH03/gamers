@@ -46,17 +46,16 @@ export function Hud({ view, send }: ScreenProps) {
             {view.hud}
           </span>
         </div>
-        {view.online ? (
-          <span className="hud-online">online</span>
-        ) : (
-          <HudButton
-            label="Pause"
-            className="hud-button--icon"
-            onPress={() => send(action.simple('pause'))}
-          >
-            <span className="pause-icon" aria-hidden="true" />
-          </HudButton>
-        )}
+        {view.online ? <span className="hud-online">online</span> : null}
+        {/* Online the game cannot pause (the server runs on): the same
+            button and Esc open the menu over it. */}
+        <HudButton
+          label={view.online ? 'Menu' : 'Pause'}
+          className="hud-button--icon"
+          onPress={() => send(action.simple('pause'))}
+        >
+          <span className="pause-icon" aria-hidden="true" />
+        </HudButton>
       </div>
       {view.commands.length > 0 ? (
         <div className="hud-commands" role="group" aria-label="Game actions">

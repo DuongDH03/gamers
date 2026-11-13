@@ -90,6 +90,24 @@ inline bool read_save_file(const std::string& path, std::vector<std::uint8_t>& b
   return true;
 }
 
+// A save or load error from the functions here, for a UI: the same reason
+// with the save file's path (long, and it may show the player's user name)
+// put in words. The full message still goes to the console.
+inline std::string save_error_for_ui(std::string error, const std::string& path) {
+  if (error.rfind("no save at ", 0) == 0) return "there is no save yet";
+  if (error.rfind("not a usable file name", 0) == 0) return "the save folder's name cannot be used";
+  const std::string scene = "cannot load the scene for this save";
+  if (error.rfind(scene, 0) == 0) return scene;  // the rest names the scene file
+  if (path.empty()) return error;
+  for (const std::string& named : {path + ".tmp", path}) {
+    for (std::size_t at = error.find(named); at != std::string::npos; at = error.find(named, at)) {
+      error.replace(at, named.size(), "the save file");
+      at += 13;  // past "the save file"
+    }
+  }
+  return error;
+}
+
 // Saves the server's World (read between ticks) to `path`.
 inline bool save_game(const scraps::Server& server, const std::string& game_name, const std::string& path,
                       std::string& error) {

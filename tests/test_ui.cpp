@@ -3,6 +3,7 @@
 // the UI model, GameApi version 3's UI commands, and the client as a
 // one-frame function driven by a headless UI.
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -11,12 +12,15 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "backends/headless/headless_backend.h"
+#include "backends/udp/udp_net.h"
 #include "client/client_app.h"
 #include "common/game_module.h"
 #include "common/pause.h"
+#include "common/save_game.h"
 #include "common/ui_json.h"
 #include "common/ui_model.h"
 #include "core/fixed_step.h"
@@ -817,7 +821,9 @@ void client_app_main_menu_play_pause_save_resume_quit(test::Context& ctx) {
   CHECK(app.frames(1));
   CHECK(app.app->stats().saves == 1 && app.app->stats().save_errors == 0);
   CHECK(app.view().find("\"has_save\":true") != std::string::npos);
-  CHECK(app.view().find("\"notice\":\"saved to ") != std::string::npos);
+  // The UI's notice is short and names no path (the console has the path).
+  CHECK(app.view().find("\"notice\":\"saved\"") != std::string::npos);
+  CHECK(app.view().find("quick.sav") == std::string::npos);
   CHECK(app.app->paused());  // saving does not resume
 
   // F5 in a menu does nothing: the menus own the keyboard.
@@ -859,7 +865,8 @@ void client_app_continue_loads_the_quick_save(test::Context& ctx) {
     CHECK(run->action("{\"type\":\"action\",\"name\":\"continue\"}"));
     CHECK(run->frames(5));
     CHECK(run->app->ui().screen() == UiScreen::kMain && run->app->stats().save_errors == 1);
-    CHECK(run->view().find("\"notice\":\"load failed: ") != std::string::npos);
+    CHECK(run->view().find("\"notice\":\"load failed: there is no save yet\"") != std::string::npos);
+    CHECK(run->view().find("quick.sav") == std::string::npos);
     // Play, then save with F5 while playing.
     CHECK(run->action("{\"type\":\"action\",\"name\":\"play\"}"));
     CHECK(run->frames(60));
@@ -993,6 +1000,190 @@ void input_while_paused_or_in_a_menu_never_acts(test::Context& ctx) {
   }
 }
 
+// The notice in each view the UI was given, in order.
+std::vector<std::string> notices_posted(const std::vector<std::string>& posts) {
+  // (The view has an array, which JsonObject does not read: found by hand.)
+  const std::string key = "\"notice\":\"";
+  std::vector<std::string> notices;
+  for (const std::string& post : posts) {
+    const std::size_t at = post.find(key);
+    const std::size_t end = at == std::string::npos ? at : post.find('"', at + key.size());
+    notices.push_back(end == std::string::npos ? "?" : post.substr(at + key.size(), end - at - key.size()));
+  }
+  return notices;
+}
+
+void save_errors_for_the_ui_name_no_path(test::Context& ctx) {
+  const std::string path = "C:\\Users\\Phuong\\AppData\\Roaming\\Scraps\\sandbox\\quick.sav";
+  CHECK(save_error_for_ui("no save at " + path, path) == "there is no save yet");
+  CHECK(save_error_for_ui("cannot write " + path + ".tmp", path) == "cannot write the save file");
+  CHECK(save_error_for_ui("cannot replace " + path + ": Access is denied.", path) ==
+        "cannot replace the save file: Access is denied.");
+  CHECK(save_error_for_ui(path + " is too big to be a save", path) == "the save file is too big to be a save");
+  CHECK(save_error_for_ui("cannot read " + path, path) == "cannot read the save file");
+  CHECK(save_error_for_ui("not a usable file name: '" + path + "'", path) == "the save folder's name cannot be used");
+  CHECK(save_error_for_ui("cannot load the scene for this save: cannot open scene file 'D:\\x\\a.scene'", path) ==
+        "cannot load the scene for this save");
+  CHECK(save_error_for_ui("the save file is corrupted (checksum mismatch)", path) ==
+        "the save file is corrupted (checksum mismatch)");
+}
+
+// A notice repeated while the UI still shows it (a second save within its
+// 4 s) is shown again: the UI shows a notice when its text changes, so it
+// is given one view without it in between. And no notice names a path.
+void client_app_notices_are_short_and_shown_again(test::Context& ctx) {
+  if (!sandbox_is_the_selected_game(ctx)) return;
+  const auto run = std::make_unique<App>(true, work_dir("notices"));
+  App& app = *run;
+  CHECK(app.start());
+  CHECK(app.action("{\"type\":\"action\",\"name\":\"play\"}"));
+  CHECK(app.frames(60) && app.playing());
+  CHECK(app.action("{\"type\":\"action\",\"name\":\"save\"}"));
+  CHECK(app.frames(2));
+  const std::size_t after_first = app.backend.ui().posts().size();
+  CHECK(app.view().find("\"notice\":\"saved\"") != std::string::npos);
+  // One second later, while "saved" is still on: save again (F5 this time).
+  CHECK(app.frames(60));
+  app.backend.input().press(Key::kF5);
+  CHECK(app.frames(1));
+  app.backend.input().release(Key::kF5);
+  CHECK(app.frames(2));
+  CHECK(app.app->stats().saves == 2);
+  std::vector<std::string> later(app.backend.ui().posts().begin() + static_cast<std::ptrdiff_t>(after_first),
+                                 app.backend.ui().posts().end());
+  const std::vector<std::string> notices = notices_posted(later);
+  // "" then "saved" again (other views, the HUD's coins, may come between).
+  std::size_t cleared = notices.size();
+  for (std::size_t i = 0; i < notices.size(); ++i) {
+    if (notices[i].empty()) {
+      cleared = i;
+      break;
+    }
+  }
+  CHECK(cleared < notices.size());
+  bool again = false;
+  for (std::size_t i = cleared + 1; i < notices.size(); ++i) again = again || notices[i] == "saved";
+  CHECK(again);
+  // Different text needs no gap: a load right after shows at once.
+  const std::size_t before_load = app.backend.ui().posts().size();
+  app.backend.input().press(Key::kF9);
+  CHECK(app.frames(1));
+  app.backend.input().release(Key::kF9);
+  CHECK(app.app->stats().loads == 1 && app.backend.ui().posts().size() == before_load + 1);
+  CHECK(app.view().find("\"notice\":\"loaded\"") != std::string::npos);
+  for (const std::string& post : app.backend.ui().posts()) {
+    CHECK(post.find("quick.sav") == std::string::npos && post.find("notices") == std::string::npos);
+  }
+}
+
+// The UI's game buttons follow the same rule as keys: pressed before a
+// pause, a menu or a load, they never act after it.
+void ui_game_commands_never_outlive_a_pause_or_a_load(test::Context& ctx) {
+  if (!sandbox_is_the_selected_game(ctx)) return;
+  const char* drop = "{\"type\":\"action\",\"name\":\"command\",\"command\":\"drop_coin\"}";
+  const auto run = std::make_unique<App>(true, work_dir("ui_commands"));
+  App& app = *run;
+  CHECK(app.start());
+  CHECK(app.action("{\"type\":\"action\",\"name\":\"play\"}"));
+  CHECK(app.frames(60) && app.playing());
+  // The HUD's button and P in the same frame: the menu opens, nothing is sent.
+  CHECK(app.action(drop));
+  app.backend.input().press(Key::kP);
+  CHECK(app.frames(1));
+  app.backend.input().release(Key::kP);
+  CHECK(app.app->paused() && app.app->ui().queued_commands() == 0);
+  CHECK(app.frames(10));
+  CHECK(app.action("{\"type\":\"action\",\"name\":\"resume\"}"));
+  CHECK(app.frames(30));
+  CHECK(!app.app->paused() && app.app->stats().ui_commands == 0);
+  // Across an F9 load: the button pressed in the frame of the load does not
+  // act in the loaded game.
+  CHECK(app.action("{\"type\":\"action\",\"name\":\"save\"}"));
+  CHECK(app.frames(5));
+  CHECK(app.action(drop));
+  app.backend.input().press(Key::kF9);
+  CHECK(app.frames(1));
+  app.backend.input().release(Key::kF9);
+  CHECK(app.app->stats().loads == 1);
+  CHECK(app.frames(30));
+  CHECK(app.app->stats().ui_commands == 0);
+  // The control: pressed while playing, it is sent.
+  CHECK(app.action(drop));
+  CHECK(app.frames(2));
+  CHECK(app.app->stats().ui_commands == 1);
+}
+
+// Online (a real server over UDP on 127.0.0.1): the UI's "pause" (Esc in
+// the page, or the HUD's Menu button) opens the menu and the game runs on;
+// "resume" (Esc again) closes it; native Esc does the same.
+void client_app_online_menu_never_pauses(test::Context& ctx) {
+  if (!sandbox_is_the_selected_game(ctx)) return;
+  std::string error;
+  std::unique_ptr<udp::UdpNet> server_net = udp::UdpNet::open(kLocalhostIp, 0, error);
+  CHECK(server_net != nullptr);
+  if (!server_net) {
+    std::printf("    %s\n", error.c_str());
+    return;
+  }
+  Scene scene;
+  CHECK(load_scene(SCRAPS_SANDBOX_SCENE_DIR, "top-down", scene, error));
+  ServerConfig server_config;
+  server_config.cookie_secret = CookieSecret{0x0BADC0DEull, 0x5EEDull};
+  Server server(*server_net, make_world(scene, movement_rules_for(scene.level.perspective)), &sandbox::simulate,
+                scene.name, scene.content_hash, server_config);
+
+  headless::HeadlessBackend backend;
+  backend.ui().set_present(true);
+  ClientOptions options;
+  options.scene_dir = SCRAPS_SANDBOX_SCENE_DIR;
+  options.connect = "127.0.0.1:" + std::to_string(server_net->local_address().port);
+  options.headless = true;
+  options.threads = 0;
+  options.save_dir = work_dir("online");
+  const auto app = std::make_unique<ClientApp>(options, backend.services(), nullptr);
+  CHECK(app->start(error));
+  double now = 0.0;
+  auto frames = [&](int count) {
+    for (int i = 0; i < count; ++i) {
+      now += 1.0 / 60.0;
+      if (!app->frame(now)) return false;
+      server.poll(now);
+      server.tick();
+      std::this_thread::sleep_for(std::chrono::microseconds(500));  // real sockets
+    }
+    return true;
+  };
+  auto joined = [&]() { return find_entity(app->client().current_world(), app->client().local_entity()) != nullptr; };
+  CHECK(backend.ui().inject("{\"type\":\"action\",\"name\":\"play\"}"));
+  for (int i = 0; i < 600 && !joined(); ++i) CHECK(frames(1));
+  CHECK(joined());
+  CHECK(backend.ui().last_post().find("\"online\":true") != std::string::npos);
+
+  CHECK(backend.ui().inject("{\"type\":\"action\",\"name\":\"pause\"}"));
+  CHECK(frames(1));
+  CHECK(app->ui().screen() == UiScreen::kPaused && !app->paused());
+  CHECK(backend.ui().last_post().find("\"screen\":\"paused\"") != std::string::npos);
+  CHECK(backend.ui().last_post().find("\"paused\":false") != std::string::npos);
+  const long ticks = app->stats().ticks;
+  const std::uint32_t server_tick = server.world().tick;
+  CHECK(frames(30));
+  CHECK(app->stats().ticks >= ticks + 25 && app->stats().ticks_while_paused == 0);
+  CHECK(server.world().tick >= server_tick + 25);
+  CHECK(backend.ui().inject("{\"type\":\"action\",\"name\":\"resume\"}"));
+  CHECK(frames(1));
+  CHECK(app->ui().screen() == UiScreen::kPlaying);
+  // Native Esc (scraps_client with a UI): the same menu, the same way out.
+  backend.input().press(Key::kEscape);
+  CHECK(frames(1));
+  backend.input().release(Key::kEscape);
+  CHECK(app->ui().screen() == UiScreen::kPaused && !app->paused());
+  backend.input().press(Key::kEscape);
+  CHECK(frames(1));
+  backend.input().release(Key::kEscape);
+  CHECK(app->ui().screen() == UiScreen::kPlaying);
+  CHECK(app->finish() == 0);
+}
+
 void client_app_without_a_ui_plays_at_once(test::Context& ctx) {
   if (!sandbox_is_the_selected_game(ctx)) return;
   const auto run = std::make_unique<App>(false, work_dir("no_ui"));
@@ -1040,4 +1231,8 @@ void register_ui_tests(test::Registry& registry) {
   registry.add("ui.client_app_volumes_follow_the_ui", client_app_volumes_follow_the_ui);
   registry.add("ui.input_while_paused_or_in_a_menu_never_acts", input_while_paused_or_in_a_menu_never_acts);
   registry.add("ui.client_app_without_a_ui_plays_at_once", client_app_without_a_ui_plays_at_once);
+  registry.add("ui.save_errors_for_the_ui_name_no_path", save_errors_for_the_ui_name_no_path);
+  registry.add("ui.client_app_notices_are_short_and_shown_again", client_app_notices_are_short_and_shown_again);
+  registry.add("ui.ui_game_commands_never_outlive_a_pause_or_a_load", ui_game_commands_never_outlive_a_pause_or_a_load);
+  registry.add("ui.client_app_online_menu_never_pauses", client_app_online_menu_never_pauses);
 }

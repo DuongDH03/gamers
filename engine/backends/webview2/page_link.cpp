@@ -47,16 +47,18 @@ std::uint32_t FrameFlow::new_generation() {
   m_last_sent = 0;
   m_acked = 0;
   m_requested = false;
+  m_answering = false;
   return m_generation;
 }
 
 void FrameFlow::page_gone() {
   m_page_generation = 0;
   m_requested = false;
+  m_answering = false;
 }
 
 bool FrameFlow::can_send() const {
-  if (m_generation == 0 || m_page_generation != m_generation) return false;
+  if (m_generation == 0 || m_page_generation != m_generation || !m_answering) return false;
   if (m_last_sent == 0) return true;
   // Frames sent and not drawn yet: at most one may be outstanding before
   // the next is written, so the slot written is never one the page reads.
@@ -67,11 +69,13 @@ bool FrameFlow::can_send() const {
 void FrameFlow::sent(std::uint32_t seq) {
   if (m_first_sent == 0) m_first_sent = seq;
   m_last_sent = seq;
+  m_answering = false;  // one frame per request
 }
 
 bool FrameFlow::take_request() {
   const bool requested = m_requested;
   m_requested = false;
+  if (requested) m_answering = true;
   return requested;
 }
 

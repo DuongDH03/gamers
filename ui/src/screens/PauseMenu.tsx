@@ -6,8 +6,9 @@ export function PauseMenu({ view, send }: ScreenProps) {
     <section className="screen screen--overlay" data-menu="" aria-labelledby="pause-title">
       <div className="panel">
         <header className="panel__header">
+          {/* Online the game runs on behind the menu. */}
           <h2 id="pause-title" className="panel__title">
-            Paused
+            {view.online ? 'Menu' : 'Paused'}
           </h2>
           <p className="panel__sub">{view.hud}</p>
         </header>

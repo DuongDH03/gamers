@@ -1,8 +1,10 @@
-# The WebView2 SDK (Microsoft.Web.WebView2 NuGet package, MIT licence), for
-# the webview2 backend and scraps_web (UI layout A). Windows only.
+# The WebView2 SDK (Microsoft.Web.WebView2 NuGet package, BSD-3-Clause
+# licence: its LICENSE.txt ships in the release as licenses/WebView2.txt),
+# for the webview2 backend and scraps_web (UI layout A). Windows only.
 #
-# Sets SCRAPS_WEBVIEW2_SDK to TRUE and defines the interface target
-# scraps_webview2_sdk (headers + loader) when it is available.
+# Sets SCRAPS_WEBVIEW2_SDK to TRUE, SCRAPS_WEBVIEW2_LICENSE to the package's
+# LICENSE.txt, and defines the interface target scraps_webview2_sdk
+# (headers + loader) when it is available.
 #
 # The loader:
 #   MSVC   WebView2LoaderStatic.lib, linked in: nothing extra to ship.
@@ -14,6 +16,7 @@
 
 set(SCRAPS_WEBVIEW2_SDK FALSE)
 set(SCRAPS_WEBVIEW2_LOADER_DLL "")
+set(SCRAPS_WEBVIEW2_LICENSE "")
 
 option(SCRAPS_WITH_WEBVIEW2 "Build the WebView2 backend and scraps_web (Windows)" ON)
 
@@ -36,6 +39,12 @@ if(WIN32 AND SCRAPS_WITH_WEBVIEW2)
     message(WARNING "Scraps: the WebView2 package has no build/native/include/WebView2.h; skipping scraps_web")
     return()
   endif()
+
+  if(NOT EXISTS "${webview2_SOURCE_DIR}/LICENSE.txt")
+    message(WARNING "Scraps: the WebView2 package has no LICENSE.txt; skipping scraps_web (it cannot ship without it)")
+    return()
+  endif()
+  set(SCRAPS_WEBVIEW2_LICENSE "${webview2_SOURCE_DIR}/LICENSE.txt")
 
   add_library(scraps_webview2_sdk INTERFACE)
   target_include_directories(scraps_webview2_sdk SYSTEM INTERFACE "${scraps_webview2_native}/include")

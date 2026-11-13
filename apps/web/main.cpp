@@ -11,8 +11,10 @@
 // Pacing: the page asks for a frame after each requestAnimationFrame, so
 // ClientApp::frame runs once per displayed frame, at the display's rate, and
 // never faster than the page can draw. When the page asks for none
-// (minimised, hidden, still loading), a 20 ms timeout keeps the game, the
-// network and the sound going (Rule 2: the fixed-step clock catches up).
+// (minimised, hidden, still loading), a frame runs anyway every 20 ms on this
+// loop's clock: the game, the network and the sound go on (Rule 2: the
+// fixed-step clock catches up), and that frame sends the page nothing.
+// Only this loop reads the clock; the backend gets it as a function.
 //
 // This file names the concrete backends (Rule 3), as apps may.
 
@@ -40,10 +42,18 @@ using namespace scraps;
 
 // How long to wait for the page to ask for a frame before running one anyway.
 constexpr double kFallbackFrameSeconds = 0.020;
-// Self-test: frames the page must draw after Play before it is checked.
+// How long WebView2 may take to start (create() waits at most this, in all).
+constexpr double kStartTimeoutSeconds = 30.0;
+// Self-test: frames the page must draw after Play before it is checked, and
+// how long it may take from when the window is up. ctest's TIMEOUT for
+// web_window_self_test (apps/web/CMakeLists.txt) is longer than both
+// together.
 constexpr std::uint64_t kSelfTestFrames = 120;
 constexpr double kSelfTestTimeoutSeconds = 90.0;
-// ctest's "skipped" exit code (the WebView2 runtime is not installed).
+// A page that has drawn nothing this long while the window is not on screen
+// (minimised, a locked or disconnected session) will not draw: skipped.
+constexpr double kOffScreenSeconds = 15.0;
+// ctest's "skipped" exit code: no WebView2 runtime, or no desktop to draw on.
 constexpr int kSkipped = 77;
 
 struct Options {
@@ -56,6 +66,7 @@ struct Options {
   bool hot_game = false;
   std::string ui_dir;   // --ui-dir: the built UI (ui/dist)
   std::string ui_dev;   // --ui-dev: a dev server URL instead
+  std::string user_data_dir;  // --user-data-dir: WebView2's profile folder
   bool debug_hud = false;
   bool self_test = false;
   std::string screenshot;
@@ -74,17 +85,59 @@ void print_usage() {
       "  --threads <n>         worker threads for the simulation (default: cores - 1; 0 = none)\n"
       "  --hot-game            offline only: run the game from its module and reload it when rebuilt\n"
       "  --ui-dir <dir>        the built UI (default: ui/ next to this program, else the build's ui/dist)\n"
-      "  --ui-dev <url>        load the UI from a dev server (npm run dev: http://localhost:5173/)\n"
+      "  --ui-dev <url>        development builds: load the UI from a dev server on this PC\n"
+      "                        (npm run dev: http://localhost:5173/)\n"
+      "  --user-data-dir <dir> where WebView2 keeps its profile (default: %%LOCALAPPDATA%%\\Scraps\\WebView2)\n"
       "  --debug-hud           also draw the engine's debug text (scene, tick, fps)\n"
       "  --save-dir <dir>      where quick saves go (default: %%APPDATA%%\\Scraps\\<game>)\n"
       "  --self-test           press Play, let the page draw %d frames, check the canvas, quit\n"
-      "                        (exit code 0 if it drew, 77 if WebView2 is not installed)\n"
+      "                        (exit code 0 if it drew; 77 if WebView2 is not installed or\n"
+      "                        there is no desktop to draw on)\n"
       "  --screenshot <file>   with --self-test: save the canvas as a PNG, and the whole window\n"
       "                        as <file>-window.png\n"
       "keys: WASD/arrows move, Space jump, E drop coin, click place coin, V view, -/= or wheel zoom,\n"
       "      Esc menu, P pause, F5 quick save, F9 quick load; gamepad as scraps_client\n",
       scraps_apps::selected_game().name, scraps_apps::selected_game().default_scene,
       static_cast<int>(kSelfTestFrames));
+}
+
+// True if `url` is http(s) on this PC: localhost, 127.0.0.1 or [::1], with
+// an optional port, and no user name (http://localhost@elsewhere/ is not).
+// --ui-dev gives the page the game's bridge, so it must be the developer's
+// own dev server, never a site.
+bool is_loopback_url(const std::string& url) {
+  std::size_t start = 0;
+  if (url.compare(0, 7, "http://") == 0) {
+    start = 7;
+  } else if (url.compare(0, 8, "https://") == 0) {
+    start = 8;
+  } else {
+    return false;
+  }
+  const std::size_t end = url.find_first_of("/?#", start);
+  std::string authority = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+  for (char& c : authority) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  std::string host;
+  std::size_t after = 0;
+  if (!authority.empty() && authority[0] == '[') {
+    after = authority.find(']');
+    if (after == std::string::npos) return false;
+    ++after;
+  } else {
+    after = authority.find(':');
+    if (after == std::string::npos) after = authority.size();
+  }
+  host = authority.substr(0, after);
+  const std::string port = authority.substr(after);
+  if (!port.empty()) {
+    if (port[0] != ':' || port.size() < 2 || port.size() > 6) return false;
+    for (std::size_t i = 1; i < port.size(); ++i) {
+      if (port[i] < '0' || port[i] > '9') return false;
+    }
+  }
+  return host == "localhost" || host == "127.0.0.1" || host == "[::1]";
 }
 
 bool parse_options(const std::vector<std::string>& args, Options& options) {
@@ -135,11 +188,19 @@ bool parse_options(const std::vector<std::string>& args, Options& options) {
     } else if (arg == "--ui-dir") {
       if (!value(options.ui_dir)) return false;
     } else if (arg == "--ui-dev") {
-      if (!value(options.ui_dev)) return false;
-      if (options.ui_dev.compare(0, 7, "http://") != 0 && options.ui_dev.compare(0, 8, "https://") != 0) {
-        std::fprintf(stderr, "--ui-dev needs an http:// or https:// URL\n");
+      // Development builds only (release builds have no DevTools either).
+      if (!scraps_apps::selected_game().hot_reload) {
+        std::fprintf(stderr, "--ui-dev is not available in this build\n");
         return false;
       }
+      if (!value(options.ui_dev)) return false;
+      if (!is_loopback_url(options.ui_dev)) {
+        std::fprintf(stderr,
+                     "--ui-dev needs an http:// or https:// URL on this PC (localhost, 127.0.0.1 or [::1])\n");
+        return false;
+      }
+    } else if (arg == "--user-data-dir") {
+      if (!value(options.user_data_dir)) return false;
     } else if (arg == "--debug-hud") {
       options.debug_hud = true;
     } else if (arg == "--self-test") {
@@ -175,8 +236,9 @@ bool has_index(const std::string& dir) {
   return std::filesystem::is_regular_file(std::filesystem::u8path(dir) / "index.html", error);
 }
 
-// Where the built UI is: --ui-dir, ui/ next to the exe (a release), or the
-// build's ui/dist (compiled in; development builds run from the build folder).
+// Where the built UI is: --ui-dir, ui/ next to the exe (a release), or, in
+// development builds only, the build's ui/dist (compiled in: they run from
+// the build folder). Release builds carry no path of the build machine.
 std::string find_ui_dir(const Options& options) {
   if (!options.ui_dir.empty()) {
     // WebView2 serves a folder by its full path.
@@ -185,11 +247,16 @@ std::string find_ui_dir(const Options& options) {
     return error ? options.ui_dir : full.u8string();
   }
   const std::string exe_dir = scraps::dynlib::executable_directory();
+  std::string next_to_exe = "ui";
   if (!exe_dir.empty()) {
-    const std::string next_to_exe = (std::filesystem::u8path(exe_dir) / "ui").u8string();
+    next_to_exe = (std::filesystem::u8path(exe_dir) / "ui").u8string();
     if (has_index(next_to_exe)) return next_to_exe;
   }
+#ifdef SCRAPS_WEB_UI_BUILD_DIR
   return SCRAPS_WEB_UI_BUILD_DIR;
+#else
+  return next_to_exe;  // the error then names where a release looked
+#endif
 }
 
 // --self-test: the steps, one per frame, until it passes, fails or times out.
@@ -199,6 +266,13 @@ class SelfTest {
 
   // False when the test is over (then result() says how).
   bool step(webview2::WebView2Platform& web, const scraps_apps::ClientApp& app, double now) {
+    if (web.frames_drawn() == 0 && !web.on_screen() && now - m_start > kOffScreenSeconds) {
+      // Nothing can draw: a minimised window, or a locked or disconnected
+      // session. Not a failure of the build: skipped, like a missing runtime.
+      std::printf("self-test: skipped: the page drew nothing and the window is not on screen (step %d)\n", m_step);
+      m_result = kSkipped;
+      return false;
+    }
     if (now - m_start > kSelfTestTimeoutSeconds) {
       std::printf("self-test: timed out in step %d (page ready %d, views %zu, frames drawn %llu)\n", m_step,
                   web.page_ready() ? 1 : 0, web.views_sent(), static_cast<unsigned long long>(web.frames_drawn()));
@@ -280,8 +354,18 @@ int run(const Options& options) {
   const std::unique_ptr<sdl3::Sdl3Devices> devices = sdl3::Sdl3Devices::create(notes);
   if (!notes.empty()) std::printf("sound and gamepad: %s\n", notes.c_str());
 
+  // The loop owns the clock ("only the loop reads the clock", Rule 2); the
+  // window gets it as a function for its start-up waits.
+  const auto start = std::chrono::steady_clock::now();
+  auto seconds = [start]() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  };
+
   webview2::WebViewOptions web_options;
   web_options.developer = scraps_apps::selected_game().hot_reload;  // development builds
+  web_options.user_data_dir = options.user_data_dir;
+  web_options.clock = seconds;
+  web_options.start_timeout_seconds = kStartTimeoutSeconds;
   if (!options.ui_dev.empty()) {
     web_options.url = options.ui_dev;
     std::printf("UI from %s\n", options.ui_dev.c_str());
@@ -306,7 +390,10 @@ int run(const Options& options) {
                                                                                             failure);
   if (!web) {
     std::fprintf(stderr, "error: %s\n", error.c_str());
-    return failure == webview2::CreateFailure::kNoRuntime && options.self_test ? kSkipped : 1;
+    const bool cannot_run_here =
+        failure == webview2::CreateFailure::kNoRuntime || failure == webview2::CreateFailure::kNoDesktop;
+    if (cannot_run_here && options.self_test) std::printf("self-test: skipped: %s\n", error.c_str());
+    return cannot_run_here && options.self_test ? kSkipped : 1;
   }
   web->set_gamepad(devices.get());
   PlatformServices platform = web->services();
@@ -329,15 +416,15 @@ int run(const Options& options) {
     return 1;
   }
 
-  // The loop owns the clock ("only the loop reads the clock").
-  const auto start = std::chrono::steady_clock::now();
-  auto seconds = [&start]() {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-  };
   std::unique_ptr<SelfTest> self_test;
   if (options.self_test) self_test = std::make_unique<SelfTest>(options, seconds());
   while (true) {
-    web->wait_for_frame(kFallbackFrameSeconds);
+    // Until the page asks for a frame, or for 20 ms on this loop's clock;
+    // each wait returns as soon as any message arrives, and the deadline is
+    // checked here.
+    const double deadline = seconds() + kFallbackFrameSeconds;
+    while (!web->wait_for_frame(deadline - seconds()) && !web->close_requested() && seconds() < deadline) {
+    }
     devices->pump();  // before the window's pump_events(), which reads the pad
     const double now = seconds();
     if (!app->frame(now)) break;

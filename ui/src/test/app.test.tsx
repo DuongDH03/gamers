@@ -190,6 +190,28 @@ describe('notice', () => {
     expect(screen.getByText('saved')).toBeInTheDocument();
   });
 
+  it('a second save while the first notice shows is a new notice (native sends "" between)', () => {
+    vi.useFakeTimers();
+    const app = renderApp({ screen: 'paused', notice: 'saved' });
+    const first = screen.getByText('saved');
+    act(() => vi.advanceTimersByTime(NOTICE_MS / 2));
+    app.show({ screen: 'paused', notice: '' });
+    app.show({ screen: 'paused', notice: 'saved' });
+    const second = screen.getByText('saved');
+    expect(second).not.toBe(first); // a new element: its animation starts again
+    // ...and it stays its own full time.
+    act(() => vi.advanceTimersByTime(NOTICE_MS - 100));
+    expect(screen.getByText('saved')).toBe(second);
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.queryByText('saved')).toBeNull();
+  });
+
+  it('a long notice is shown whole, as sent', () => {
+    const text = 'load failed: the save was made by a build whose world format is version 3; this build reads 4';
+    renderApp({ screen: 'paused', notice: text });
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
   it('a new notice replaces the old one', () => {
     vi.useFakeTimers();
     const app = renderApp({ screen: 'playing', notice: 'saved' });
@@ -292,20 +314,52 @@ describe('settings', () => {
 });
 
 describe('online', () => {
-  it('hides pause on the HUD, and Esc does not pause', () => {
+  it('Esc while playing sends pause (native opens the menu; the game runs on)', () => {
+    const app = renderApp({ screen: 'playing', online: true });
+    esc();
+    expect(app.posted).toEqual([{ type: 'action', name: 'pause' }]);
+  });
+
+  it('the HUD has a Menu button, not Pause, and says online', async () => {
+    const user = userEvent.setup();
     const app = renderApp({ screen: 'playing', online: true });
     expect(queryButton('Pause')).toBeNull();
     expect(screen.getByText('online')).toBeInTheDocument();
     expect(button('Drop coin')).toBeInTheDocument();
-    esc();
-    expect(app.posted).toEqual([]);
+    await user.click(button('Menu'));
+    expect(app.posted).toEqual([{ type: 'action', name: 'pause' }]);
   });
 
-  it('hides Save and Load in the pause menu', () => {
-    renderApp({ screen: 'paused', online: true, has_save: true });
+  it('the menu offers Resume, Settings and Quit, and no Save or Load', async () => {
+    const user = userEvent.setup();
+    const app = renderApp({ screen: 'paused', online: true, paused: false, has_save: true });
+    expect(screen.getByRole('heading', { name: 'Menu' })).toBeInTheDocument();
+    const menu = screen.getByRole('navigation', { name: 'Pause menu' });
+    expect(within(menu).getAllByRole('button').map((b) => b.textContent)).toEqual(['Resume', 'Settings', 'Quit']);
     expect(queryButton('Save')).toBeNull();
     expect(queryButton('Load')).toBeNull();
-    expect(button('Resume')).toBeInTheDocument();
+    expect(button('Resume')).toHaveFocus();
+    await user.click(button('Settings'));
+    expect(app.posted).toEqual([{ type: 'action', name: 'open_settings' }]);
+  });
+
+  it('Esc in the menu sends resume, so it closes', () => {
+    const app = renderApp({ screen: 'paused', online: true, paused: false });
+    esc();
+    expect(app.posted).toEqual([{ type: 'action', name: 'resume' }]);
+  });
+
+  it('with the mock: Esc opens the menu over a running game, Esc closes it', () => {
+    const bridge = createMockBridge({ online: true, tickMs: 0 });
+    render(<App bridge={bridge} />);
+    act(() => bridge.send({ type: 'action', name: 'play' }));
+    expect(screen.getByTestId('hud-text')).toBeInTheDocument();
+    act(() => esc());
+    expect(screen.getByRole('heading', { name: 'Menu' })).toBeInTheDocument();
+    expect(bridge.current()).toMatchObject({ screen: 'paused', paused: false, online: true });
+    act(() => esc());
+    expect(screen.getByTestId('hud-text')).toBeInTheDocument();
+    bridge.dispose();
   });
 
   it('hides Continue (a load) on the main menu', () => {

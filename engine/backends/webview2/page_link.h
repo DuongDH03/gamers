@@ -61,9 +61,13 @@ class PageUi final : public UiHost {
 // The page draws in requestAnimationFrame and then asks for the next frame
 // ("rf <generation> <acked> <w> <h>"). Native answers each request with at
 // most one frame, written into slot seq % 3 and announced with a tiny text
-// message. A slot is reused only when the page cannot still read it: frame
-// n+1 is sent only once the page drew n-1 (it draws the newest frame it was
-// told about, so it never goes back to an older one).
+// message. A frame is recorded and sent only to answer a request the app
+// took (take_request) for it: a frame the app runs anyway, because no
+// request came in time, still ticks, mixes and pumps, but draws nothing for
+// the page, so the page is never sent more than it asked for. A slot is
+// reused only when the page cannot still read it: frame n+1 is sent only
+// once the page drew n-1 (it draws the newest frame it was told about, so it
+// never goes back to an older one).
 //
 // A generation is one posting of the shared buffer. A new page (hello) or a
 // bigger buffer starts a new one; frames and acks of another generation do
@@ -78,15 +82,18 @@ class FrameFlow {
   // The page reloaded: no requests count until it says hello again.
   void page_gone();
 
-  // True if a frame can be sent now: the page holds this generation, asked
-  // for a frame, and the slot for the next one is free.
+  // True if a frame can be sent now: the page holds this generation, this
+  // frame answers a request it took, and the slot for the next one is free.
   bool can_send() const;
   // The slot for frame `seq`.
   static std::uint32_t slot_for(std::uint32_t seq) { return seq % 3; }
-  // A frame was sent (copied into its slot and announced).
+  // A frame was sent (copied into its slot and announced): the request is answered.
   void sent(std::uint32_t seq);
-  // Takes the pending request (true if there was one): the caller runs one frame for it.
+  // Takes the pending request (true if there was one): the caller runs one
+  // frame for it, and that frame may send.
   bool take_request();
+  // The frame the caller ran is over: a later frame needs a request of its own.
+  void frame_done() { m_answering = false; }
 
   std::uint32_t generation() const { return m_generation; }
   std::uint32_t page_generation() const { return m_page_generation; }
@@ -102,7 +109,8 @@ class FrameFlow {
   std::uint32_t m_first_sent = 0;  // in this generation; 0 = none
   std::uint32_t m_last_sent = 0;
   std::uint32_t m_acked = 0;
-  bool m_requested = false;
+  bool m_requested = false;  // the page asked, and no frame has been run for it yet
+  bool m_answering = false;  // the frame now running answers a request
   int m_width = 0;
   int m_height = 0;
   std::uint64_t m_frames_drawn = 0;

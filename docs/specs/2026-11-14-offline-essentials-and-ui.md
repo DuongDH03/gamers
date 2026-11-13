@@ -1434,3 +1434,185 @@ the shared buffer) draws as well.
   the windows here were 893x785 pixels, not 1280x720 CSS pixels.
 - IME text input, and the `tx` path with a real text field (no game has one).
 - High display rates (120 Hz and up) and a GPU-bound page.
+
+## Review fixes, part 6 (2026-11-14)
+
+The final review of part 6 (layout A, WebView2) and its merges said No-Go
+with two blockers. Each finding, and what was done (line numbers as of this
+commit). No rule was bent; everything stays inside this spec.
+
+**Blocking**
+
+- **1. Rule 2: the backend read the clock.** `webview2_backend.cpp` no
+  longer includes `<chrono>`, and no file in `engine/` mentions `chrono`,
+  `steady_clock`, `QueryPerformanceCounter` or `GetTickCount` any more.
+  - `wait_for_frame(max_seconds)` (`engine/backends/webview2/webview2_backend.cpp:955`)
+    handles the waiting messages, then does one bounded
+    `MsgWaitForMultipleObjectsEx` and returns. The deadline is the app's:
+    `apps/web/main.cpp:425` loops on its own clock until the page asks or
+    20 ms pass.
+  - `create()`'s waits get the time from the app: `WebViewOptions::clock`
+    (`webview2_backend.h:56`, a function the app passes; `main.cpp:367`),
+    and one deadline covers all three waits (`webview2_backend.cpp:751`,
+    `wait_until` at `:623`).
+  - The unused `<chrono>` in `apps/client/client_app.cpp` is gone.
+- **2. Esc did nothing online in `scraps_web`.** Online, Esc while playing
+  now sends `pause` (`ui/src/App.tsx:21`), and the HUD has a Menu button
+  (`ui/src/screens/Hud.tsx:53`) where offline it has Pause. Natively
+  `UiModel` already opened the menu without pausing
+  (`apps/common/ui_model.cpp:117`); Esc in that menu sends `resume`, which
+  closes it. The online menu is titled "Menu" and offers Resume, Settings
+  and Quit, with no Save or Load (`ui/src/screens/PauseMenu.tsx:11`). The
+  mock game does the same (`ui/src/mockBridge.ts:79`).
+  - Vitest: `online` in `ui/src/test/app.test.tsx:316` (Esc sends pause,
+    the Menu button, exactly Resume/Settings/Quit, Esc sends resume, and a
+    round with the mock) and the mock's own test.
+  - Native: `ui.client_app_online_menu_never_pauses`
+    (`tests/test_ui.cpp:1119`): a real server over UDP on 127.0.0.1; the
+    UI's `pause` opens the menu (`"screen":"paused"`, `"paused":false`),
+    the client and the server keep ticking, `resume` closes it, and native
+    Esc opens and closes it too.
+  - `cmake/README.txt.in:16` now says so (Esc opens and closes the menus;
+    online the menu opens over a game that goes on).
+
+**Should fix**
+
+- **3. Windows SDK and COM headers in the layer check.**
+  `cmake/CheckLayers.cmake:16` lists the OS and SDK headers (POSIX,
+  Winsock, Win32, COM and shell, WebView2) as non-standard, so they are
+  allowed only where listed: webview2 (`:94`), dynlib (`windows.h`,
+  `shellapi.h`, `dlfcn.h`) and udp. Apps and tests may include none of them
+  (`:101`). `layer_rules_catch_mixed_case` (`cmake/TestCheckLayers.cmake:35`)
+  now also plants `<WebView2.h>` and `<ShlWApi.h>` in core, `<objidl.h>` in
+  views, `<shellapi.h>` in udp and `<webview2.h>` in tests, and expects
+  each to be reported, while the real webview2, dynlib and udp includes pass.
+- **4. `npm ci` raced in the shared `ui/`.** Every npm step now runs
+  through `cmake/ScrapsNpm.cmake`, which holds `file(LOCK ui/.npm.lock)`
+  (`:22`) around `npm ci`, `npm run build` and the `ui_tests` run
+  (`cmake/ScrapsUi.cmake:30`, `tests/CMakeLists.txt:76`). `npm ci` is also
+  skipped when `node_modules/` already matches `package-lock.json`, so the
+  second preset does not wipe what the first just installed. Without npm the
+  configure message (`ScrapsUi.cmake:58`) says that `ui/dist` is used if it
+  is there and, when it is not, that `scraps_web` cannot start and
+  `package_runs` fails. Proof: with both stamps and the install marker
+  deleted, `mingw` and `msvc` were clean-rebuilt at the same time (results
+  below).
+- **5. WebView2 SDK licence.** `cmake/ScrapsWebView2.cmake:1` says
+  BSD-3-Clause. The release installs the package's `LICENSE.txt` as
+  `licenses/WebView2.txt` (`apps/web/CMakeLists.txt:40`) and SDL's
+  `LICENSE.txt` (zlib; SDL3 is linked statically) as `licenses/SDL3.txt`
+  (`cmake/ScrapsPackage.cmake:55`). `cmake/README.txt.in:73` has a
+  "Licences" section, and `package_runs` checks both files are there and
+  not empty (`cmake/TestPackageRuns.cmake:60`).
+- **6. Notices.**
+  - The UI gets short notices without paths: "saved", "loaded",
+    "save failed: <reason>", "load failed: <reason>"
+    (`apps/client/client_app.cpp:346` and on). The reason has the save
+    path put in words (`save_error_for_ui`, `apps/common/save_game.h:96`:
+    "there is no save yet", "cannot write the save file"). Reload messages
+    keep only their headline for the UI. Stdout and the debug HUD keep the
+    full text with the path.
+  - The same notice twice (a second save within 4 s) shows again: each
+    notice counts, and when the UI already shows that text it gets one view
+    with `""` first, then the text (`client_app.cpp:724`). The 6a protocol
+    is unchanged, so `bridge.ts` needed nothing.
+  - `ui/src/styles.css:575`: the notice has a `max-width`,
+    `overflow-wrap: anywhere` and is no longer upper-cased.
+  - Tests: `ui.save_errors_for_the_ui_name_no_path` (`tests/test_ui.cpp:1016`),
+    `ui.client_app_notices_are_short_and_shown_again` (`:1034`: two saves a
+    second apart post "saved", "", "saved"; a load right after posts
+    "loaded" at once; no view names the save file or its folder), the
+    existing flow tests now expect `"notice":"saved"`, and Vitest "a second
+    save while the first notice shows" (`ui/src/test/app.test.tsx:193`).
+- **7. `web_window_self_test` skipping.**
+  - With `--self-test`, exit 77 also for `CreateFailure::kNoDesktop`
+    (`apps/web/main.cpp:393`): the window cannot be made, or the WebView2
+    control cannot be while there is no input desktop
+    (`webview2_backend.cpp:841`, `:870`); and when the page has drawn
+    nothing for 15 s while the window is not on screen (hidden, minimised,
+    a locked or disconnected session; `WebView2Platform::on_screen`,
+    `webview2_backend.cpp:1009`; `main.cpp:269`). Skips print "skipped",
+    never "FAILED" or "timed out".
+  - `--user-data-dir <dir>` (`main.cpp:202`): the test's WebView2 profile
+    is `build/<preset>/apps/web/web_test/webview2-profile`, not
+    `%LOCALAPPDATA%`.
+  - Timeouts: WebView2's start is 30 s in all (`main.cpp:46`), the
+    self-test 90 s, and ctest's TIMEOUT 180 s (`apps/web/CMakeLists.txt:57`).
+- **8. UI game commands survived a pause or a load.** `UiModel::clear_commands`
+  (`apps/common/ui_model.h:169`) runs wherever the controls' latches are
+  dropped (`drop_latched_input`, `client_app.cpp:315`): when the game gains
+  or loses the input (`:597`) and after every successful load (`:365`).
+  Test `ui.ui_game_commands_never_outlive_a_pause_or_a_load`
+  (`tests/test_ui.cpp:1081`): a HUD command and P in the same frame, then
+  resume: nothing sent; a command in the frame of an F9 load: nothing sent;
+  the control sends one.
+
+**Minor**
+
+- **9. Pacing.** A frame is recorded and sent only to answer a page request
+  the app took for it: `FrameFlow::can_send` needs it
+  (`engine/backends/webview2/page_link.cpp:61`), `sent()` and
+  `frame_done()` (`page_link.h:96`, called by every `wait_for_frame`) end
+  it. Fallback frames still tick, mix and pump; their textures wait.
+  Tests: `webview2.frame_flow_never_writes_a_slot_the_page_may_read`
+  (`tests/test_webview2.cpp:482`, rewritten for one frame per request) and
+  `webview2.only_requested_frames_are_sent` (`:557`, a `BatchRenderer` on
+  the flow: five fallback frames send nothing, a request that came during a
+  frame is answered by the next, two frames for one request send one).
+- **10. `SCRAPS_WEB_UI_BUILD_DIR`** is defined only with `SCRAPS_HOT_RELOAD`
+  (`apps/web/CMakeLists.txt:16`); release builds look next to the exe only
+  (`main.cpp:255`).
+- **11. `--ui-dev`** is refused in release builds and accepts only
+  `http(s)://localhost`, `127.0.0.1` or `[::1]`, with an optional port and
+  no user name (`main.cpp:190`, `is_loopback_url` at `:108`).
+- **12. The loader** is loaded with `LoadLibraryExW(...,
+  LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)`
+  (`webview2_backend.cpp:769`).
+- **13. Stale comment.** `engine/core/game_api.h:94` (and
+  `apps/common/game_module.h:169`) now say: a letter first, then letters,
+  digits or `_`.
+- **14. Resource queue stall.** Resources that do not fit in one frame
+  beside its draws go over the next frames, whole commands in order
+  (`BatchRenderer::resources_fitting`,
+  `engine/backends/webview2/batch_renderer.cpp:230`). One texture is at
+  most a quarter of a frame and the draws at most what is left beside one
+  (`open_batch`, `:142`), so every frame carries at least one and the queue
+  always drains. The frame limit is a constructor argument (64 MB by
+  default) so the test can use a small one:
+  `webview2.resources_too_big_for_one_frame_go_over_several`
+  (`tests/test_webview2.cpp:609`; ten textures and a destroy over a 64 KB
+  frame limit, with full draws every frame: never dropped, every texture
+  once and in order, and a frame the page does not take keeps its share).
+- **15. `package_runs` never started `scraps_web`.** New test
+  `package_web_runs` (`tests/CMakeLists.txt:146`, labels `package;window`;
+  `cmake/TestPackageRuns.cmake:91`): installs the release, copies it to a
+  folder named `Phương 模块`, cuts `PATH` to Windows' own folders and runs
+  the installed `scraps_web --self-test`, checking it took its UI from
+  there. It counts as skipped without the runtime or a desktop.
+- **16.** Done with 1 (the unused `<chrono>`).
+- **17. Navigation filtering.** `FrameNavigationStarting`
+  (`webview2_backend.cpp:568`, added at `:908`) applies the same rule to
+  iframes: the UI's own origin only.
+
+**Mutation check** (MinGW): with `ui->clear_commands()` removed, the
+`""`-between-repeats removed, the request check taken out of
+`FrameFlow::can_send`, and the whole resource queue put in every frame,
+`ui.client_app_notices_are_short_and_shown_again`,
+`ui.ui_game_commands_never_outlive_a_pause_or_a_load`, the two frame-flow
+tests and `webview2.resources_too_big_for_one_frame_go_over_several` fail.
+With the old React `backAction` put back (`view.online ? null : ...`), two
+of the new Vitest online cases fail.
+
+**Results.** `mingw` and `msvc` were clean-rebuilt at the same time, with
+both npm stamps and the install marker deleted: MinGW ran `npm ci`, MSVC
+waited for the lock and then found `node_modules/` current; zero compiler
+warnings on both. `ctest -j 8` on both presets at the same time: 39 of 39
+pass on each (171 unit test functions, 6 of them new; new CTest test
+`package_web_runs`), and `ctest -L window` runs `web_window_self_test` and
+`package_web_runs` (both drew, none skipped here). In `ui/`:
+`npm run typecheck` clean, `npm test` 120 of 120, `npm run build` clean.
+
+**Not verified:** the skip paths themselves (no locked session, service or
+missing runtime was tried here), and a release-preset build (only `mingw`
+and `msvc` were built; `--ui-dev` refusal and the missing
+`SCRAPS_WEB_UI_BUILD_DIR` in release builds were checked by reading).

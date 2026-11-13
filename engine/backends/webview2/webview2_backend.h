@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -50,11 +51,17 @@ struct WebViewOptions {
   bool developer = false;
   // UTF-8; where WebView2 keeps its profile. Empty: %LOCALAPPDATA%\Scraps\WebView2.
   std::string user_data_dir;
+  // Seconds from any fixed origin. Only the app's loop reads a clock (Rule 2),
+  // so create() asks this one while it waits for WebView2 to start. Required.
+  std::function<double()> clock;
+  // How long create() waits, in all, for WebView2 to start.
+  double start_timeout_seconds = 30.0;
 };
 
 enum class CreateFailure : std::uint8_t {
   kNone,
   kNoRuntime,  // the WebView2 runtime is not installed
+  kNoDesktop,  // no desktop to show a window on (a service, a locked or disconnected session)
   kOther,
 };
 
@@ -82,9 +89,14 @@ class WebView2Platform final : public Window {
   // The gamepad's source (not owned), read only while this window is in front.
   void set_gamepad(const Input* pad);
 
-  // Handles window messages until the page asks for a frame (after its
-  // requestAnimationFrame: true) or `max_seconds` pass (false; a minimised
-  // or hidden page asks for none, and the game must run on).
+  // Handles the waiting window messages and, unless the page has already
+  // asked for a frame, waits once for more (at most `max_seconds`, less if
+  // any message arrives) and handles them. True if the page asked for a
+  // frame (after its requestAnimationFrame): the next frame may draw and send
+  // one. False otherwise; the app's loop checks its own clock and calls again
+  // or runs a frame anyway (a minimised or hidden page asks for none, and the
+  // game must run on), which then ticks, mixes and pumps but sends no frame.
+  // This reads no clock (Rule 2): the deadline is the app's.
   bool wait_for_frame(double max_seconds);
 
   // Window
@@ -106,6 +118,9 @@ class WebView2Platform final : public Window {
   // Files written so far (each request writes two).
   int screenshots_written() const;
   bool page_ready() const;               // the page's WebGL said hello
+  // The window is shown, not minimised, on the desktop that gets input (not
+  // a locked or disconnected session): a page there can draw.
+  bool on_screen() const;
   std::uint64_t frames_drawn() const;    // frames the page reported drawn
   std::size_t views_sent() const;        // view messages posted to the page
   std::size_t rejected_messages() const; // page messages refused (input and unknown)

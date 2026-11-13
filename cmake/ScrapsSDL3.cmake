@@ -1,9 +1,12 @@
 # Finds or downloads SDL3. Sets SCRAPS_SDL3_TARGET to the target to link,
-# or to an empty string when the SDL3 backend is not built.
+# or to an empty string when the SDL3 backend is not built, and
+# SCRAPS_SDL3_LICENSE to SDL's LICENSE.txt (zlib) when it was downloaded:
+# it is linked into the programs, so the release ships it as licenses/SDL3.txt.
 #
 # SDL3 is only ever linked by engine/backends/sdl3 (Rule 3).
 
 set(SCRAPS_SDL3_TARGET "")
+set(SCRAPS_SDL3_LICENSE "")
 
 if(SCRAPS_WITH_SDL3)
   find_package(SDL3 CONFIG QUIET)
@@ -26,6 +29,9 @@ if(SCRAPS_WITH_SDL3)
       SYSTEM)  # SDL's headers never trip our warnings-as-errors
     FetchContent_MakeAvailable(SDL3)
     set(SCRAPS_SDL3_TARGET SDL3::SDL3-static)
+    if(EXISTS "${sdl3_SOURCE_DIR}/LICENSE.txt")
+      set(SCRAPS_SDL3_LICENSE "${sdl3_SOURCE_DIR}/LICENSE.txt")
+    endif()
   else()
     message(WARNING "Scraps: SDL3 not found and SCRAPS_FETCH_SDL3 is OFF. "
                     "Only the headless backend will be built.")

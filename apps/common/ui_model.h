@@ -163,6 +163,10 @@ class UiModel {
   // `out` in order (and forgotten). Call at a tick while connected.
   void take_commands(scraps::PlayerId player, scraps::CommandList& out);
   std::size_t queued_commands() const { return m_queued; }
+  // Forgets the queued commands: the app calls it wherever it drops the
+  // game controls' latched presses (a pause, a menu, a load), so a button
+  // pressed before never acts after.
+  void clear_commands() { m_queued = 0; }
 
   // Builds the view message and posts it if its text differs from the last
   // one posted. Returns true if it posted. Allocates nothing.

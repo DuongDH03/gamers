@@ -13,7 +13,6 @@
 #include <WebView2.h>
 
 #include <array>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -229,6 +228,24 @@ bool write_file(const std::wstring& path, const std::vector<std::uint8_t>& bytes
   return ok && written == bytes.size();
 }
 
+// True if this session's input desktop can be opened: false for a service,
+// and while the session is locked or disconnected (the sign-in screen's
+// desktop gets the input then, and a page in a window here cannot draw).
+bool has_input_desktop() {
+  HDESK desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+  if (desktop == nullptr) return false;
+  CloseDesktop(desktop);
+  return true;
+}
+
+// Milliseconds for one MsgWaitForMultipleObjectsEx: `seconds`, rounded up,
+// at least 1 and at most a minute (a bad deadline never hangs a wait).
+DWORD wait_milliseconds(double seconds) {
+  if (!(seconds > 0.0)) return 1;
+  if (seconds > 60.0) return 60000;
+  return static_cast<DWORD>(seconds * 1000.0) + 1;
+}
+
 constexpr wchar_t kWindowClass[] = L"ScrapsWebView2Window";
 // The first slot size; a frame that does not fit grows the buffer.
 constexpr std::size_t kInitialSlotBytes = std::size_t{1} << 20;
@@ -254,6 +271,7 @@ struct WebView2Platform::Impl final : FrameSink, ViewPoster {
   std::wstring url;
   std::wstring origin;
   std::wstring folder;
+  std::function<double()> clock;  // the app's (Rule 2); read only while create() waits
 
   // WebView2
   Com<ICoreWebView2Environment> environment;
@@ -266,6 +284,7 @@ struct WebView2Platform::Impl final : FrameSink, ViewPoster {
   std::size_t slot_capacity = 0;
   EventRegistrationToken message_token{};
   EventRegistrationToken starting_token{};
+  EventRegistrationToken frame_starting_token{};
   EventRegistrationToken completed_token{};
   EventRegistrationToken new_window_token{};
   EventRegistrationToken failed_token{};
@@ -317,6 +336,7 @@ struct WebView2Platform::Impl final : FrameSink, ViewPoster {
   ControllerCreated on_controller{kIidControllerCreated, *this, &Impl::controller_created};
   MessageReceived on_message{kIidMessageReceived, *this, &Impl::message_received};
   NavigationStarting on_starting{kIidNavigationStarting, *this, &Impl::navigation_starting};
+  NavigationStarting on_frame_starting{kIidNavigationStarting, *this, &Impl::frame_navigation_starting};
   NavigationCompleted on_completed{kIidNavigationCompleted, *this, &Impl::navigation_completed};
   NewWindow on_new_window{kIidNewWindow, *this, &Impl::new_window};
   ProcessFailed on_failed{kIidProcessFailed, *this, &Impl::process_failed};
@@ -327,6 +347,7 @@ struct WebView2Platform::Impl final : FrameSink, ViewPoster {
   static HRESULT controller_created(Impl& self, HRESULT result, ICoreWebView2Controller* created);
   static HRESULT message_received(Impl& self, ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args);
   static HRESULT navigation_starting(Impl& self, ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args);
+  static HRESULT frame_navigation_starting(Impl& self, ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args);
   static HRESULT navigation_completed(Impl& self, ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args);
   static HRESULT new_window(Impl& self, ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args);
   static HRESULT process_failed(Impl& self, ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args);
@@ -336,8 +357,11 @@ struct WebView2Platform::Impl final : FrameSink, ViewPoster {
 
   // Handles every waiting window message. False once WM_QUIT arrived.
   bool dispatch_messages();
-  // Waits (handling messages) until `done` or `seconds` pass.
-  bool wait_until(const bool& done, double seconds);
+  // Waits (handling messages) until `done`, or until the app's clock
+  // reaches `deadline` (false).
+  bool wait_until(const bool& done, double deadline);
+  // True if a navigation may go ahead: only to the UI's own origin.
+  bool allowed(ICoreWebView2NavigationStartingEventArgs* args) const;
   void fit_to_window();
   void handle_page_text(const wchar_t* message);
   void handle_screenshot(const wchar_t* message);
@@ -356,6 +380,7 @@ WebView2Platform::Impl::~Impl() {
   if (webview && tokens_added) {
     webview->remove_WebMessageReceived(message_token);
     webview->remove_NavigationStarting(starting_token);
+    webview->remove_FrameNavigationStarting(frame_starting_token);
     webview->remove_NavigationCompleted(completed_token);
     webview->remove_NewWindowRequested(new_window_token);
     webview->remove_ProcessFailed(failed_token);
@@ -517,13 +542,17 @@ void WebView2Platform::Impl::handle_screenshot(const wchar_t* message) {
   window_shot_path.clear();
 }
 
+bool WebView2Platform::Impl::allowed(ICoreWebView2NavigationStartingEventArgs* args) const {
+  LPWSTR uri = nullptr;
+  const bool ours = SUCCEEDED(args->get_Uri(&uri)) && starts_with(uri, origin);
+  CoTaskMemFree(uri);
+  return ours;
+}
+
 HRESULT WebView2Platform::Impl::navigation_starting(Impl& self, ICoreWebView2*,
                                                     ICoreWebView2NavigationStartingEventArgs* args) {
   if (args == nullptr) return S_OK;
-  LPWSTR uri = nullptr;
-  const bool ours = SUCCEEDED(args->get_Uri(&uri)) && starts_with(uri, self.origin);
-  CoTaskMemFree(uri);
-  if (!ours) {
+  if (!self.allowed(args)) {
     // The game window shows the game's UI and nothing else (a link in it,
     // or a script, cannot take it to another site).
     args->put_Cancel(TRUE);
@@ -533,6 +562,15 @@ HRESULT WebView2Platform::Impl::navigation_starting(Impl& self, ICoreWebView2*,
   self.ui.page_gone();
   self.flow.page_gone();
   self.hello = false;
+  return S_OK;
+}
+
+HRESULT WebView2Platform::Impl::frame_navigation_starting(Impl& self, ICoreWebView2*,
+                                                          ICoreWebView2NavigationStartingEventArgs* args) {
+  // An iframe (one the UI made, or one a script injected) is held to the
+  // same rule as the page: our origin only. Nothing else changes: the page
+  // and its buffer stay.
+  if (args != nullptr && !self.allowed(args)) args->put_Cancel(TRUE);
   return S_OK;
 }
 
@@ -582,14 +620,13 @@ bool WebView2Platform::Impl::dispatch_messages() {
   return true;
 }
 
-bool WebView2Platform::Impl::wait_until(const bool& done, double seconds) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+bool WebView2Platform::Impl::wait_until(const bool& done, double deadline) {
   while (!done) {
     if (!dispatch_messages()) return false;
     if (done) break;
-    const double left = std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
-    if (left <= 0.0) return false;
-    MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(left * 1000.0) + 1, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    const double left = deadline - clock();
+    if (!(left > 0.0)) return false;
+    MsgWaitForMultipleObjectsEx(0, nullptr, wait_milliseconds(left), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
   }
   return true;
 }
@@ -703,8 +740,15 @@ WebView2Platform::~WebView2Platform() = default;
 std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& desc, const WebViewOptions& options,
                                                            std::string& error, CreateFailure& failure) {
   failure = CreateFailure::kOther;
+  if (!options.clock) {
+    error = "no clock to wait for WebView2 with";
+    return nullptr;
+  }
   auto impl = std::make_unique<Impl>();
   Impl& s = *impl;
+  s.clock = options.clock;
+  // One deadline for every wait below, so the whole start is bounded.
+  const double deadline = s.clock() + options.start_timeout_seconds;
   s.developer = options.developer;
   s.url = to_wide(options.url);
   s.origin = origin_of(s.url);
@@ -720,7 +764,10 @@ std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& des
   using VersionFunction = HRESULT(STDAPICALLTYPE*)(PCWSTR, LPWSTR*);
   using CreateFunction = HRESULT(STDAPICALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
                                                   ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
-  HMODULE loader = LoadLibraryW(L"WebView2Loader.dll");
+  // From the program's own folder (and Windows' for what it needs), never
+  // from the working folder or PATH, where another DLL of that name may be.
+  HMODULE loader = LoadLibraryExW(L"WebView2Loader.dll", nullptr,
+                                  LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (loader == nullptr) {
     error = "WebView2Loader.dll is missing (it belongs next to the program)";
     return nullptr;
@@ -791,6 +838,7 @@ std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& des
   s.hwnd = CreateWindowExW(0, kWindowClass, title.c_str(), style, left, top, width, height, nullptr, nullptr, instance,
                            nullptr);
   if (s.hwnd == nullptr) {
+    failure = CreateFailure::kNoDesktop;  // a window station without a desktop (a service)
     error = "cannot create the window";
     return nullptr;
   }
@@ -800,6 +848,9 @@ std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& des
 
   // The profile folder: per user, never next to the exe (Program Files is read-only).
   std::wstring data_dir = to_wide(options.user_data_dir);
+  for (wchar_t& c : data_dir) {
+    if (c == L'/') c = L'\\';  // a Windows path, whichever way it was written
+  }
   if (data_dir.empty()) {
     wchar_t local[MAX_PATH] = {};
     const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
@@ -808,12 +859,15 @@ std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& des
 
   const HRESULT created =
       create_environment(nullptr, data_dir.empty() ? nullptr : data_dir.c_str(), nullptr, &s.on_environment);
-  if (FAILED(created) || !s.wait_until(s.environment_done, 30.0) || !s.environment) {
+  if (FAILED(created) || !s.wait_until(s.environment_done, deadline) || !s.environment) {
     error = "WebView2 did not start";
     return nullptr;
   }
   if (FAILED(s.environment->CreateCoreWebView2Controller(s.hwnd, &s.on_controller)) ||
-      !s.wait_until(s.controller_done, 30.0) || !s.controller) {
+      !s.wait_until(s.controller_done, deadline) || !s.controller) {
+    // Without a desktop to show it on (locked, disconnected) the control
+    // cannot be made: that is no usable desktop, not a broken build.
+    if (!has_input_desktop()) failure = CreateFailure::kNoDesktop;
     error = "the WebView2 control could not be created";
     return nullptr;
   }
@@ -851,6 +905,7 @@ std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& des
 
   s.webview->add_WebMessageReceived(&s.on_message, &s.message_token);
   s.webview->add_NavigationStarting(&s.on_starting, &s.starting_token);
+  s.webview->add_FrameNavigationStarting(&s.on_frame_starting, &s.frame_starting_token);
   s.webview->add_NavigationCompleted(&s.on_completed, &s.completed_token);
   s.webview->add_NewWindowRequested(&s.on_new_window, &s.new_window_token);
   s.webview->add_ProcessFailed(&s.on_failed, &s.failed_token);
@@ -860,7 +915,7 @@ std::unique_ptr<WebView2Platform> WebView2Platform::create(const WindowDesc& des
   const std::wstring script =
       to_wide(std::string(reinterpret_cast<const char*>(kRendererJs), sizeof(kRendererJs) - 1));
   if (script.empty() || FAILED(s.webview->AddScriptToExecuteOnDocumentCreated(script.c_str(), &s.on_script)) ||
-      !s.wait_until(s.script_done, 30.0) || FAILED(s.create_result)) {
+      !s.wait_until(s.script_done, deadline) || FAILED(s.create_result)) {
     error = "cannot add the renderer script to the page";
     return nullptr;
   }
@@ -898,14 +953,13 @@ PlatformServices WebView2Platform::services() {
 void WebView2Platform::set_gamepad(const Input* pad) { m->input.set_gamepad(pad); }
 
 bool WebView2Platform::wait_for_frame(double max_seconds) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(max_seconds);
-  while (true) {
-    if (!m->dispatch_messages() || m->close_requested) return false;
-    if (m->flow.take_request()) return true;
-    const double left = std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
-    if (left <= 0.0) return false;
-    MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(left * 1000.0) + 1, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-  }
+  // The frame before is over: whatever it did not answer needs a new request.
+  m->flow.frame_done();
+  if (!m->dispatch_messages() || m->close_requested) return false;
+  if (m->flow.take_request()) return true;
+  MsgWaitForMultipleObjectsEx(0, nullptr, wait_milliseconds(max_seconds), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+  if (!m->dispatch_messages() || m->close_requested) return false;
+  return m->flow.take_request();
 }
 
 void WebView2Platform::pump_events() {
@@ -951,6 +1005,10 @@ void WebView2Platform::request_screenshot(const std::string& path) {
 int WebView2Platform::screenshots_written() const { return m->screenshots; }
 
 bool WebView2Platform::page_ready() const { return m->hello; }
+
+bool WebView2Platform::on_screen() const {
+  return m->hwnd != nullptr && IsWindowVisible(m->hwnd) && !IsIconic(m->hwnd) && has_input_desktop();
+}
 
 std::uint64_t WebView2Platform::frames_drawn() const { return m->flow.frames_drawn(); }
 

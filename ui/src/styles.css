@@ -570,13 +570,17 @@ kbd {
 }
 
 .notice {
+  /* A long notice ("load failed: ...") wraps inside the window instead of
+     running off it. Not upper-cased: a reason may name a scene or a file. */
+  max-width: min(36rem, calc(100vw - 2rem));
   margin: 0;
   padding: 0.55rem 1.3rem;
   font-family: var(--font-display);
   font-size: 1rem;
   font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+  overflow-wrap: anywhere;
   color: var(--ink);
   background: var(--amber);
   border: 2px solid var(--amber-deep);
