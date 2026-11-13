@@ -4,8 +4,9 @@
 // in-memory LoopbackHub (Rule 5: offline = client + embedded server).
 // Online (--connect host:port): talks to a scraps_server over UDP.
 //
-// The game's code comes through a GameApi (core/game_api.h): the sandbox
-// linked into this exe, or with --hot-game (offline only) the sandbox module
+// The game's code comes through a GameApi (core/game_api.h): the game this
+// exe was built for (CMake's SCRAPS_GAME, through the generated
+// selected_game.h), or with --hot-game (offline only) that game's module
 // next to it, swapped in again whenever it is rebuilt (common/game_module.h).
 //
 // This file is the only place where the client picks concrete backends
@@ -23,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/dynlib/library.h"
 #include "backends/headless/headless_backend.h"
 #include "backends/udp/udp_net.h"
 #if SCRAPS_HAS_SDL3
@@ -30,6 +32,7 @@
 #endif
 #include "common/game_module.h"
 #include "common/random_secret.h"
+#include "common/scene_dir.h"
 #include "common/scene_reload.h"
 #include "core/fixed_step.h"
 #include "core/jobs.h"
@@ -39,7 +42,7 @@
 #include "net/loopback.h"
 #include "net/server.h"
 #include "platform/services.h"
-#include "sandbox/sandbox.h"
+#include "selected_game.h"
 #include "views/controls.h"
 #include "views/sound_bank.h"
 #include "views/sprite_bank.h"
@@ -50,8 +53,8 @@ namespace {
 using namespace scraps;
 
 struct Options {
-  std::string scene = "isometric";
-  std::string scene_dir = SCRAPS_SANDBOX_SCENE_DIR;
+  std::string scene = scraps_apps::selected_game().default_scene;
+  std::string scene_dir;  // --scene-dir; parse_options() fills it in otherwise (common/scene_dir.h)
   std::string connect;  // empty: offline, with an embedded server
   std::string view;     // empty: the scene's own view
   bool headless = false;
@@ -64,10 +67,10 @@ struct Options {
 
 void print_usage() {
   std::printf(
-      "usage: scraps_client [options]\n"
-      "  --scene <name>        scene to play offline (default: isometric)\n"
-      "                        bundled: top-down, side, isometric, crowd\n"
-      "  --scene-dir <dir>     where .scene files are\n"
+      "usage: scraps_client [options]       (game: %s)\n"
+      "  --scene <name>        scene to play offline (default: %s)\n"
+      "  --scene-dir <dir>     where .scene files are (default: scenes/ next to this program,\n"
+      "                        else the game's source folder)\n"
       "  --connect <ip:port>   join a scraps_server instead of playing offline\n"
       "  --view <name>         start in top-down, side or isometric view\n"
       "  --headless            no window: run --frames frames and print a summary\n"
@@ -75,10 +78,12 @@ void print_usage() {
       "  --no-autopilot        headless mode without scripted key presses\n"
       "  --threads <n>         worker threads for the simulation (default: cores - 1; 0 = none)\n"
       "  --hot-game            offline only: run the game from its module and reload it\n"
-      "                        when rebuilt (cmake --build --preset mingw-game / msvc-game)\n"
+      "                        when rebuilt (cmake --build --preset mingw-game / msvc-game;\n"
+      "                        development builds only)\n"
       "keys: WASD/arrows move, Space jump, E drop coin, left click place coin, V next view,\n"
       "      -/= or wheel zoom, Esc quit\n"
-      "offline, editing the .scene file reloads it while the game runs\n");
+      "offline, editing the .scene file reloads it while the game runs\n",
+      scraps_apps::selected_game().name, scraps_apps::selected_game().default_scene);
 }
 
 bool parse_options(int argc, char** argv, Options& options) {
@@ -127,6 +132,11 @@ bool parse_options(int argc, char** argv, Options& options) {
     } else if (arg == "--no-autopilot") {
       options.autopilot = false;
     } else if (arg == "--hot-game") {
+      if (!scraps_apps::selected_game().hot_reload) {
+        // Release builds link the game statically and ship no module.
+        std::fprintf(stderr, "--hot-game is not available in this build\n");
+        return false;
+      }
       options.hot_game = true;
     } else if (arg == "--help" || arg == "-h") {
       options.help = true;
@@ -140,6 +150,13 @@ bool parse_options(int argc, char** argv, Options& options) {
     // other code only gets corrected, so it does not watch (spec, part B).
     std::fprintf(stderr, "--hot-game works offline only; run scraps_server --hot-game instead\n");
     return false;
+  }
+  const scraps_apps::SceneDirChoice scenes = scraps_apps::choose_scene_dir(
+      options.scene_dir, scraps::dynlib::executable_directory(), scraps_apps::selected_game().source_scene_dir);
+  options.scene_dir = scenes.path;
+  if (!options.help) {
+    std::printf("game '%s', scenes from %s (%s)\n", scraps_apps::selected_game().name, scenes.path.c_str(),
+                scraps_apps::scene_dir_source_name(scenes.source));
   }
   return true;
 }
@@ -159,15 +176,16 @@ struct Session {
 };
 
 bool start_session(const Options& options, Session& session, std::string& error) {
+  const scraps_apps::SelectedGame& selected = scraps_apps::selected_game();
   if (options.hot_game) {
-    if (!session.game.load(SCRAPS_GAME_MODULE_FILE, error)) {
-      error += std::string("\nbuild the game module with: ") + SCRAPS_GAME_BUILD_COMMAND;
+    if (!session.game.load(selected.module_file, error)) {
+      error += std::string("\nbuild the game module with: ") + selected.build_command;
       return false;
     }
-    session.game.watch_other_builds(SCRAPS_GAME_MODULE_OTHER_BUILDS);
+    session.game.watch_other_builds(selected.other_builds);
     std::printf("game '%s' loaded from %s\nwatching %s; rebuild it with: %s\n", session.game.name(),
-                session.game.live_path().c_str(), SCRAPS_GAME_MODULE_FILE, SCRAPS_GAME_BUILD_COMMAND);
-  } else if (!session.game.use_static(sandbox::game_api(), error)) {
+                session.game.live_path().c_str(), selected.module_file, selected.build_command);
+  } else if (!session.game.use_static(scraps_apps::selected_game_api(), error)) {
     return false;
   }
   const SimulateFn simulate = session.game.api().simulate;
@@ -318,7 +336,7 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
   double notice_until = 0.0;
   if (session.game.hot()) {
     // Where hot reload looks, and how to feed it.
-    notice = std::string("hot game: rebuild with ") + SCRAPS_GAME_BUILD_COMMAND;
+    notice = std::string("hot game: rebuild with ") + scraps_apps::selected_game().build_command;
     notice_until = 8.0;
   }
   FixedStepClock clock;

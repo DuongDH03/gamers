@@ -6,7 +6,8 @@ add_executable(scraps_tests
   test_net.cpp
   test_sandbox.cpp
   test_udp.cpp
-  test_game.cpp)
+  test_game.cpp
+  test_apps.cpp)
 # test_game.cpp tests the apps' hot reload (apps/common/game_module.h).
 target_include_directories(scraps_tests PRIVATE ${PROJECT_SOURCE_DIR}/apps)
 target_link_libraries(scraps_tests PRIVATE scraps_net scraps_views scraps_headless scraps_udp scraps_dynlib scraps_sandbox)
@@ -47,7 +48,7 @@ target_compile_definitions(scraps_tests PRIVATE
   "SCRAPS_SANDBOX_MODULE_FILE=\"$<TARGET_FILE:scraps_sandbox_module>\""
   "SCRAPS_TEST_WORK_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/game_work\"")
 
-foreach(group core scene views platform controls net sandbox udp game)
+foreach(group core scene views platform controls net sandbox udp game apps)
   add_test(NAME unit_${group} COMMAND scraps_tests ${group}.)
 endforeach()
 
@@ -61,3 +62,23 @@ target_compile_definitions(scraps_alloc_test PRIVATE
   "SCRAPS_SANDBOX_MODULE_FILE=\"$<TARGET_FILE:scraps_sandbox_module>\""
   "SCRAPS_TEST_WORK_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/game_work\"")
 add_test(NAME no_allocation_in_hot_path COMMAND scraps_alloc_test)
+
+# A game other than the sandbox (tests/tiny_game): the same client source,
+# built for it through scraps_add_game() and its generated selected_game.h.
+scraps_add_client(scraps_client_tiny tiny)
+add_test(NAME tiny_game_runs COMMAND scraps_client_tiny --headless --frames 120)
+# The HUD text comes from the tiny game's code; its scene from its own folder.
+set_tests_properties(tiny_game_runs PROPERTIES
+                     PASS_REGULAR_EXPRESSION "game 'tiny', scenes from [^\n]*tiny_game/scenes.*headless run.*tiny game"
+                     FAIL_REGULAR_EXPRESSION "FAILED|error")
+
+# The release: install it into a scratch folder and run it from there with
+# PATH cut down to Windows' own folders, so a DLL missing from the install
+# fails the test (cmake/TestPackageRuns.cmake). Takes a few seconds.
+if(WIN32)
+  add_test(NAME package_runs
+           COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${PROJECT_BINARY_DIR} -DCONFIG=$<CONFIG>
+                   -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/package_work
+                   -P ${PROJECT_SOURCE_DIR}/cmake/TestPackageRuns.cmake)
+  set_tests_properties(package_runs PROPERTIES LABELS package)
+endif()

@@ -1,0 +1,58 @@
+Scraps @PROJECT_VERSION@ - @SCRAPS_GAME@
+====================================
+
+A small 2D game made with the Scraps engine.
+
+How to run
+----------
+Double-click scraps_client.exe, or from a command prompt in this folder:
+
+    scraps_client                       play offline (default scene)
+    scraps_client --scene <name>        play another scene from scenes/
+    scraps_client --view top-down       start in another view (top-down, side, isometric)
+
+Playing together (5 to 10 players): one person runs the server, everyone
+else connects to it.
+
+    scraps_server --scene <name> --port 7777
+    scraps_client --connect <server's ip>:7777
+
+The server needs UDP port 7777 open in the firewall of the PC it runs on.
+Ctrl+C stops it.
+
+Keys
+----
+    WASD or arrows    move
+    Space             jump (side and isometric views)
+    V                 next view (top-down, side, isometric)
+    - / = or wheel    zoom
+    Esc               quit
+
+About this game
+---------------
+@SCRAPS_README_GAME_NOTES@
+Command-line options
+--------------------
+scraps_client
+    --scene <name>        scene to play offline
+    --scene-dir <dir>     where .scene files are (default: scenes\ next to the program)
+    --connect <ip:port>   join a scraps_server instead of playing offline
+    --view <name>         start in top-down, side or isometric view
+    --threads <n>         worker threads for the simulation (default: cores - 1; 0 = none)
+    --headless            no window: run --frames frames and print a summary
+    --frames <n>          quit after n frames
+    --help                all options
+
+scraps_server
+    --scene <name>             scene to host
+    --scene-dir <dir>          where .scene files are (default: scenes\ next to the program)
+    --port <n>                 UDP port (default: 7777)
+    --bind <ip>                interface to listen on (default: all; 127.0.0.1 = this PC only)
+    --max-players <n>          1 to 16 (default: 10)
+    --snapshot-interval <n>    ticks between snapshots (default: 1)
+    --ticks <n>                stop after n ticks (default: run until Ctrl+C)
+    --threads <n>              worker threads for the simulation
+    --help                     all options
+
+Scenes are plain text files in scenes\. Edit one while the game runs and it
+reloads.

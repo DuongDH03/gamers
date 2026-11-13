@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
   "configurePresets": [
     {
       "name": "mingw",
@@ -22,6 +22,20 @@
       "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build/headless",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SCRAPS_WITH_SDL3": "OFF" }
+    },
+    {
+      "name": "release-mingw",
+      "displayName": "Release package, MinGW GCC (game linked statically, no hot reload)",
+      "inherits": "mingw",
+      "binaryDir": "${sourceDir}/build/release-mingw",
+      "cacheVariables": { "SCRAPS_HOT_RELOAD": "OFF" }
+    },
+    {
+      "name": "release-msvc",
+      "displayName": "Release package, Visual Studio 2022 (game linked statically, no hot reload)",
+      "inherits": "msvc",
+      "binaryDir": "${sourceDir}/build/release-msvc",
+      "cacheVariables": { "SCRAPS_HOT_RELOAD": "OFF" }
     }
   ],
   "buildPresets": [
@@ -33,19 +47,54 @@
       "displayName": "MinGW: only the game module (hot reload while the apps run)",
       "configurePreset": "mingw",
       "jobs": 8,
-      "targets": ["scraps_sandbox_module"]
+      "targets": ["scraps_game_module"]
     },
     {
       "name": "msvc-game",
       "displayName": "MSVC: only the game module (hot reload while the apps run)",
       "configurePreset": "msvc",
       "configuration": "Release",
-      "targets": ["scraps_sandbox_module"]
-    }
+      "targets": ["scraps_game_module"]
+    },
+    { "name": "release-mingw", "configurePreset": "release-mingw", "jobs": 8 },
+    { "name": "release-msvc", "configurePreset": "release-msvc", "configuration": "Release" }
   ],
   "testPresets": [
     { "name": "mingw", "configurePreset": "mingw", "output": { "outputOnFailure": true } },
     { "name": "msvc", "configurePreset": "msvc", "configuration": "Release", "output": { "outputOnFailure": true } },
-    { "name": "headless", "configurePreset": "headless", "output": { "outputOnFailure": true } }
+    { "name": "headless", "configurePreset": "headless", "output": { "outputOnFailure": true } },
+    { "name": "release-mingw", "configurePreset": "release-mingw", "output": { "outputOnFailure": true } },
+    {
+      "name": "release-msvc",
+      "configurePreset": "release-msvc",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ],
+  "packagePresets": [
+    { "name": "release-mingw", "configurePreset": "release-mingw", "generators": ["ZIP"] },
+    { "name": "release-msvc", "configurePreset": "release-msvc", "generators": ["ZIP"], "configurations": ["Release"] }
+  ],
+  "workflowPresets": [
+    {
+      "name": "release-mingw",
+      "displayName": "Configure, build, test and zip a release with MinGW GCC",
+      "steps": [
+        { "type": "configure", "name": "release-mingw" },
+        { "type": "build", "name": "release-mingw" },
+        { "type": "test", "name": "release-mingw" },
+        { "type": "package", "name": "release-mingw" }
+      ]
+    },
+    {
+      "name": "release-msvc",
+      "displayName": "Configure, build, test and zip a release with Visual Studio 2022",
+      "steps": [
+        { "type": "configure", "name": "release-msvc" },
+        { "type": "build", "name": "release-msvc" },
+        { "type": "test", "name": "release-msvc" },
+        { "type": "package", "name": "release-msvc" }
+      ]
+    }
   ]
 }

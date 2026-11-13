@@ -284,3 +284,120 @@ localisation.
 4. Push target: commit each part, then push to `origin/main`
    (`github.com/DuongDH03/gamers`) when everything is done. Or would you
    rather have a branch and a pull request?
+
+---
+
+## Results, part 5 (packaging a release, and choosing the game)
+
+Built 2026-11-14 on its own branch (wave 1, agent 4).
+
+**What exists now**
+
+- `cmake/ScrapsGame.cmake`: `scraps_add_game(<name> SOURCES ... SCENES <dir>
+  [DEFAULT_SCENE s] [HEADER h] [API_FUNCTION f] [INCLUDE_DIR d] [README f])`
+  makes `scraps_<name>` (static), `scraps_<name>_module` (hot reload) and
+  `scraps_<name>_app`, a small library with the generated `selected_game.h`
+  and `.cpp` (templates `cmake/selected_game.*.in`). `selected_game()` gives
+  the name, default scene, source scenes folder and the hot-reload paths;
+  `selected_game_api()` the `GameApi`. `games/CMakeLists.txt` is now one call.
+- `SCRAPS_GAME` (cache string, default `sandbox`) picks the game;
+  `scraps_select_game()` refuses an unknown name and lists the known ones.
+  `apps/*/main.cpp` no longer include `sandbox/sandbox.h`; bench and tests
+  still use the sandbox directly. `scraps_add_client()` /
+  `scraps_add_server()` (apps/CMakeLists.txt) build the apps for any game.
+- The `mingw-game` / `msvc-game` presets build `scraps_game_module`, a
+  target that depends on the selected game's module (presets cannot read a
+  cache variable). Checked live: a running `scraps_server --hot-game`
+  printed "game code reloaded (sandbox)" after `cmake --build --preset
+  mingw-game`; `msvc-game` builds.
+- Scenes at run time (`apps/common/scene_dir.h`): `--scene-dir`, then
+  `scenes/` next to the exe, then the source folder. Both apps print
+  `game '<name>', scenes from <dir> (<which rule>)` at start-up. The exe's
+  folder comes from `dynlib::executable_directory()` (GetModuleFileNameW;
+  `/proc/self/exe` elsewhere), because only `backends/dynlib` may include
+  `windows.h`.
+- `SCRAPS_HOT_RELOAD` (default ON). Off, the apps answer `--hot-game` with
+  "--hot-game is not available in this build" (exit 2), and the hot-game
+  smoke tests become `client_hot_game_unavailable` /
+  `server_hot_game_unavailable`.
+- `cmake/ScrapsPackage.cmake`: install rules and CPack (ZIP,
+  `Scraps-<game>-<version>-win64.zip`, one top folder of the same name, in
+  `build/<preset>/package/`). `cmake/ScrapsInstallRuntime.cmake` runs
+  `file(GET_RUNTIME_DEPENDENCIES)` at install time with the compiler's bin
+  folder searched before PATH, drops `api-ms-*`/`ext-ms-*` and anything under
+  `C:\Windows\`, and fails the install on an unresolved or conflicting DLL.
+  MSVC adds `InstallRequiredSystemLibraries`. `README.txt` comes from
+  `cmake/README.txt.in` plus the game's own notes (`games/sandbox/README.txt`),
+  with CRLF line ends.
+- Presets file version 6 (needs CMake 3.25; 4.0.1 is installed):
+  configure/build/test/package presets and workflows `release-mingw` and
+  `release-msvc` (`build/release-mingw`, `build/release-msvc`,
+  `SCRAPS_HOT_RELOAD=OFF`).
+- Tests: `unit_apps` (4 functions: the three scene-folder rules, and that
+  `executable_directory()` holds the test exe); `package_runs` (label
+  `package`, about 2 to 7 s, so it stays in the default run): installs into
+  `build/<preset>/tests/package_work/install`, checks the files and that no
+  module was installed, then with `PATH=C:\Windows\System32;C:\Windows` runs
+  `scraps_client --headless --frames 120` from another folder (it must say
+  its scenes came from the install) and `scraps_server --ticks 30`;
+  `tiny_game_runs`: `tests/tiny_game` is a second game (engine rules, one
+  scene, HUD "tiny game") added with `scraps_add_game`, and
+  `scraps_client_tiny` is the same client source built for it.
+
+**Zips** (`cmake --workflow --preset release-mingw` / `release-msvc`)
+
+| | release-mingw | release-msvc |
+|---|---|---|
+| File | `Scraps-sandbox-0.1.0-win64.zip`, 3,629,551 bytes | `Scraps-sandbox-0.1.0-win64.zip`, 2,067,697 bytes |
+| Executables | `scraps_client.exe` 6.3 MB, `scraps_server.exe` 0.8 MB | `scraps_client.exe` 3.2 MB, `scraps_server.exe` 0.2 MB |
+| Runtime DLLs | `libstdc++-6`, `libgcc_s_seh-1`, `libwinpthread-1` | `vcruntime140`, `vcruntime140_1`, `msvcp140`, `msvcp140_1`, `msvcp140_2`, `msvcp140_atomic_wait`, `msvcp140_codecvt_ids`, `concrt140` |
+| Also | `README.txt`, `scenes/` (4 scenes, `art/` 10 PNGs, `sounds/` 3 files) | the same |
+
+Each zip was unzipped into an empty folder and run from another folder with
+`PATH=C:\Windows\System32;C:\Windows`: the client headless (120 frames, and
+600 in `side`), the server for 30 ticks, all exit 0 with images and sounds
+loaded from the zip's `scenes/`; `--hot-game` said it is not available.
+With `libstdc++-6.dll` removed from a MinGW install the client exits at once
+with `0xc0000135` (no dialog box), which is how `package_runs` fails.
+
+**`-DSCRAPS_GAME=tiny`** (a headless MinGW build in `build/tiny-headless`):
+`scraps_client --headless --frames 120` and `scraps_server --ticks 30` run
+the tiny game in its `field` scene, and `--hot-game` loads
+`scraps_tiny_module.dll`.
+
+**Test results** (26 CTest tests, 102 unit test functions)
+
+| | Build | ctest |
+|---|---|---|
+| `mingw` | 0 warnings | 26/26 passed |
+| `msvc` | 0 warnings | 26/26 passed |
+| workflow `release-mingw` | 0 warnings | 26/26 passed, zip made |
+| workflow `release-msvc` | 0 warnings | 26/26 passed, zip made |
+
+**Deviations from the text above**
+
+- **No `SDL3.dll`.** The bundled SDL3 is built as a static library
+  (`cmake/ScrapsSDL3.cmake`), so there is nothing to ship. If a shared SDL3
+  is found installed instead, the runtime-dependency step ships its DLL.
+- **The hot-reload module is still built in release build trees**, because
+  `unit_game` and the allocation test load it; it is never installed, and
+  `package_runs` checks that. With `SCRAPS_BUILD_TESTS=OFF` and
+  `SCRAPS_HOT_RELOAD=OFF` it is not built at all.
+- **The default scene moved into the game** (`DEFAULT_SCENE`, else the first
+  `.scene` file), since "isometric" is the sandbox's. The sandbox's four
+  named smoke tests run only when `SCRAPS_GAME` is `sandbox`; another game
+  gets `client_offline_default`.
+- **The tiny game builds only with tests on** (it lives in `tests/`), so
+  `-DSCRAPS_GAME=tiny` needs `SCRAPS_BUILD_TESTS=ON` (the default).
+- **README keys** list what exists on this branch. Pause (P), quick save and
+  load (F5, F9) and the gamepad come from parts 1, 3 and 4; add them to
+  `cmake/README.txt.in` when merging.
+- `workflow` presets cannot pass `-D` options, so to reuse an SDL3 source
+  folder, configure the preset once with `-DFETCHCONTENT_SOURCE_DIR_SDL3=...`
+  and then run the workflow, which keeps the cache.
+
+**Not verified:** a really clean Windows PC. On this one the VC runtime is
+also in `System32`, so the minimal-PATH run proves the MinGW DLLs are
+complete but not the MSVC list (the zip carries the VC runtime next to the
+exe, which Windows loads first). The SDL3 window from an unzipped release was
+not opened (headless runs only).

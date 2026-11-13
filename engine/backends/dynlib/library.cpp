@@ -13,6 +13,8 @@
 #endif
 
 #include <climits>
+#include <filesystem>
+#include <system_error>
 #include <vector>
 
 namespace scraps::dynlib {
@@ -96,6 +98,42 @@ void* Library::symbol(const char* name) const {
   return out;
 #else
   return dlsym(m_handle, name);
+#endif
+}
+
+std::string executable_directory() {
+#ifdef _WIN32
+  // GetModuleFileNameW truncates silently when the buffer is too small, so
+  // grow it until the name fits (Windows paths are at most 32767 characters).
+  std::vector<wchar_t> wide(MAX_PATH, L'\0');
+  DWORD length = 0;
+  for (;;) {
+    length = GetModuleFileNameW(nullptr, wide.data(), static_cast<DWORD>(wide.size()));
+    if (length == 0) return std::string();
+    if (length < wide.size()) break;
+    if (wide.size() >= 32768) return std::string();
+    wide.resize(wide.size() * 2);
+  }
+  // Back to the folder: drop the file name after the last separator.
+  while (length > 0 && wide[length - 1] != L'\\' && wide[length - 1] != L'/') --length;
+  while (length > 1 && (wide[length - 1] == L'\\' || wide[length - 1] == L'/')) --length;
+  if (length == 0 || length > static_cast<DWORD>(INT_MAX)) return std::string();
+  const int wide_length = static_cast<int>(length);
+  // WC_ERR_INVALID_CHARS: a broken name gives "" instead of a mangled path.
+  const int size =
+      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_length, nullptr, 0, nullptr, nullptr);
+  if (size <= 0) return std::string();
+  std::string text(static_cast<std::size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_length, &text[0], size, nullptr, nullptr);
+  for (char& c : text) {
+    if (c == '\\') c = '/';
+  }
+  return text;
+#else
+  std::error_code error;
+  const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", error);
+  if (error || exe.empty()) return std::string();
+  return exe.parent_path().generic_string();
 #endif
 }
 
