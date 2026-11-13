@@ -13,7 +13,7 @@ each one stands. Last updated 2026-11-12.
 | 6 | Collision and movement rules | **Done** | per-axis tile collision with sliding, gravity, jumping, lanes, kill plane; one playable scene per view |
 | 7 | Assets and scenes | **Done** | `.scene` files; PNG images, textured tiles, animated sprite sheets (`views.sprite_frames_follow_the_tick`); hot reload for server and clients (`net.hot_reload_reaches_every_client`); per-scene sky; sound effects in any common format (`core.sounds_decode_from_every_format`) |
 | 8 | Job system | **Done** | `JobSystem::parallel_for`; movement on worker threads with byte-identical results; `scraps_race_demo` loses ~70% of plain-counter updates and none with atomics |
-| 9 | Netcode | **Mostly done** | UDP server, offline = embedded server, prediction and reconciliation, remote-player interpolation (`net.remote_players_are_interpolated_without_overshoot`), redundant inputs, fragmented snapshots, lossless delta snapshots (`net.deltas_survive_loss_and_reorder`; crowd 91 KB → ~14 KB, idle isometric 694 B → 35 B), challenge-cookie handshake and rate limits (`net.hello_flood_is_rate_limited`, protocol v4). Not yet: relevance (part B), lag compensation |
+| 9 | Netcode | **Mostly done** | UDP server, offline = embedded server, prediction and reconciliation, remote-player interpolation (`net.remote_players_are_interpolated_without_overshoot`), redundant inputs, fragmented snapshots, lossless delta snapshots (`net.deltas_survive_loss_and_reorder`; crowd 91 KB → ~14 KB, idle isometric 694 B → 35 B), challenge-cookie handshake and rate limits (`net.hello_flood_is_rate_limited`; protocol v5 since 2026-11-14 adds a world epoch for loads). Not yet: relevance (part B), lag compensation |
 
 Steps 1 to 4 of the previous "Next" list (interpolation, sprites, hot reload,
 job system) were done on 2026-11-12; spec: `docs/specs/2026-11-12-next-four-steps.md`.
@@ -34,7 +34,8 @@ Each item: spec in `docs/specs/`, owner approves, implement, review, bench.
 2. ~~Internet hardening~~ **done** 2026-11-12: a forged Hello now gets one
    13-byte Challenge (smaller than the Hello) and no slot; replies to
    strangers are rate limited per address and in total; each client's
-   datagrams are capped (`net.hello_flood_is_rate_limited`, protocol v4).
+   datagrams are capped (`net.hello_flood_is_rate_limited`, protocol v4; v5 on
+   2026-11-14 added the world epoch).
 3. ~~Look and feel~~ **done** 2026-11-12: sky colour or gradient per scene,
    facing kept when a character stops, drop shadows, sound effects from any
    common audio format (`docs/decisions/2026-11-12-audio-formats.md`).

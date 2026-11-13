@@ -33,7 +33,7 @@ discussed before code, and says when to implement.
 | 8 Job system | Done: `JobSystem::parallel_for`, threaded movement, `scraps_race_demo` |
 | Mouse input · hot-reloadable game code | Done: pointer, buttons, wheel, click → Command; `GameApi`, `--hot-game`, `*-game` build presets |
 | Offline essentials · React UI | Done 2026-11-14: save/load (F5/F9), streamed music, gamepad, pause (P/start), `-DSCRAPS_GAME`, release zip (`cmake --workflow --preset release-mingw`), `scraps_web.exe` (React in WebView2 over WebGL2) |
-| 9 Netcode | Mostly done: UDP server, prediction + reconciliation, remote-player interpolation, offline over loopback, lossless delta snapshots, challenge-cookie handshake + rate limits (protocol v4). Not yet: relevance (part B), lag compensation |
+| 9 Netcode | Mostly done: UDP server, prediction + reconciliation, remote-player interpolation, offline over loopback, lossless delta snapshots, challenge-cookie handshake + rate limits, world epochs for loads (protocol v5). Not yet: relevance (part B), lag compensation |
 
 Decided: name Scraps; array-of-structs entities; one 3D tile grid with 2:1
 diamond isometric; in-house test harness + CTest; `Net` = UDP + in-memory

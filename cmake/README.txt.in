@@ -74,4 +74,5 @@ Licences
 --------
 licenses\ holds the licences of the libraries in this release: SDL3.txt
 (SDL3, zlib licence, built into the programs) and, with scraps_web.exe,
-WebView2.txt (the Microsoft WebView2 SDK, BSD 3-Clause licence).
+WebView2.txt (the Microsoft WebView2 SDK, BSD 3-Clause licence) and
+React.txt (React, react-dom and scheduler in ui\, MIT licence).

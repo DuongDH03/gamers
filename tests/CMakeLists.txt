@@ -128,7 +128,7 @@ if(WIN32)
     list(APPEND scraps_expect_licenses SDL3.txt)
   endif()
   if(TARGET scraps_web)
-    list(APPEND scraps_expect_licenses WebView2.txt)
+    list(APPEND scraps_expect_licenses WebView2.txt React.txt)
   endif()
   list(JOIN scraps_expect_licenses "," scraps_expect_licenses)
   add_test(NAME package_runs

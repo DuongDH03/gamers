@@ -682,7 +682,7 @@ Input   ◄── keys, mouse, wheel, text (only while playing; never Esc) ◄ p
 - **Building:** the WebView2 SDK is a pinned NuGet package (BSD-3-Clause;
   the release ships its licence as `licenses/WebView2.txt`). MSVC uses the
   static loader; MinGW loads `WebView2Loader.dll` at run time from the exe's
-  folder only, and ships it. CMake runs `npm ci` and `npm run build` in `ui/`
+  folder or System32 (never the current folder), and ships it. CMake runs `npm ci` and `npm run build` in `ui/`
   when npm is found, through `cmake/ScrapsNpm.cmake`, which holds a lock on
   `ui/.npm.lock` so two presets building at once take turns.
   `ctest -L window` runs a real-window self-test that clicks Play, draws
@@ -707,8 +707,8 @@ Input   ◄── keys, mouse, wheel, text (only while playing; never Esc) ◄ p
   `release-msvc`): configure, build, test and package. The zip holds:
   - `scraps_client.exe`, `scraps_web.exe` and `scraps_server.exe`;
   - the compiler runtime DLLs and `WebView2Loader.dll` (MinGW);
-  - `ui/`, `scenes/`, `licenses/` (SDL3's zlib licence and the WebView2
-    SDK's BSD-3-Clause licence) and a `README.txt`.
+  - `ui/`, `scenes/`, `licenses/` (SDL3's zlib licence, the WebView2 SDK's
+    BSD-3-Clause licence and React's MIT licence) and a `README.txt`.
   SDL3 is linked statically. Release builds link the game statically and have
   no hot reload. `package_runs` installs it and runs it with `PATH` cut to
   Windows' own folders, and also from a folder with a non-ASCII name.

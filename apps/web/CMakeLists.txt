@@ -38,6 +38,9 @@ install(DIRECTORY "${SCRAPS_UI_DIST}/" DESTINATION ui OPTIONAL)
 # The WebView2 SDK's licence (BSD-3-Clause): its loader is linked in (MSVC)
 # or shipped (MinGW).
 install(FILES "${SCRAPS_WEBVIEW2_LICENSE}" DESTINATION licenses RENAME WebView2.txt)
+# React, react-dom and scheduler (MIT) are bundled into ui/; the build strips
+# their notices, so the release carries the licence text here.
+install(FILES "${PROJECT_SOURCE_DIR}/ui/licenses/React.txt" DESTINATION licenses)
 if(SCRAPS_WEBVIEW2_LOADER_DLL)
   install(FILES "${SCRAPS_WEBVIEW2_LOADER_DLL}" DESTINATION .)
 endif()

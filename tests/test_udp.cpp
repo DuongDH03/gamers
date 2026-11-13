@@ -44,7 +44,9 @@ void a_client_joins_over_real_udp(test::Context& ctx) {
   const auto start = std::chrono::steady_clock::now();
   double now = 0.0;
   int connected_ticks = 0;
-  while (now < 3.0 && connected_ticks < 60) {
+  // Generous: sleep_for(2 ms) takes ~16 ms on Windows, and a busy machine
+  // (both presets testing at once) can stretch 60 ticks well past 3 s.
+  while (now < 15.0 && connected_ticks < 60) {
     now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     client.poll(now);
     client.tick(move, now);

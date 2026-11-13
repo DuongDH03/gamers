@@ -31,9 +31,10 @@ things: MSVC flags narrowing through `std::make_unique` arguments, for example.
 
 ## What the tests cover
 
-`ctest` runs 39 tests (171 unit test functions inside the `unit_*` ones), plus
-`web_window_self_test` and `package_web_runs` with `-L window` (they skip, exit 77,
-without a desktop). All of them pass with `ctest -j 8`, and
+`ctest` runs 39 tests (171 unit test functions inside the `unit_*` ones). Two of
+them, `web_window_self_test` and `package_web_runs`, open a real window and carry
+the label `window` (run just those with `-L window`); without a desktop they skip
+(exit 77). All of them pass with `ctest -j 8`, and
 with both presets running at once (servers use `--port 0`; smoke tests have their
 own folders):
 
