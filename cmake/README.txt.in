@@ -11,6 +11,11 @@ Double-click scraps_client.exe, or from a command prompt in this folder:
     scraps_client --scene <name>        play another scene from scenes/
     scraps_client --view top-down       start in another view (top-down, side, isometric)
 
+scraps_web.exe is the same game with menus (Play, Continue, Pause, Save,
+Load, Settings with music and effects volume) and an on-screen HUD. It needs
+the Microsoft Edge WebView2 runtime, which Windows 11 already has; Esc opens
+and closes the menus there.
+
 Playing together (5 to 10 players): one person runs the server, everyone
 else connects to it.
 

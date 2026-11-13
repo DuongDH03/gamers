@@ -66,9 +66,11 @@ check_layer("engine/backends/headless" "backends/headless/;platform/" "")
 check_layer("engine/backends/sdl3" "backends/sdl3/;platform/" "SDL3/")
 check_layer("engine/backends/udp" "backends/udp/;platform/"
             "winsock2.h;ws2tcpip.h;unistd.h;fcntl.h;errno.h;sys/;netinet/;arpa/")
-# Loading shared libraries (game modules for hot reload): the only place
-# that may include windows.h or dlfcn.h.
+# Loading shared libraries (game modules for hot reload): windows.h or dlfcn.h.
 check_layer("engine/backends/dynlib" "backends/dynlib/" "windows.h;dlfcn.h")
+# The WebView2 window (UI layout A): windows.h and the WebView2 SDK, and
+# nothing of another backend (its sound and gamepad come from the app).
+check_layer("engine/backends/webview2" "backends/webview2/;platform/" "windows.h")
 check_layer("games" "core/;platform/;views/;net/;sandbox/" "")
 
 # Apps and tests may name backends, but load libraries only through

@@ -3,7 +3,12 @@
 # own folders, as on a PC that has never seen a compiler. A DLL missing from
 # the install makes the programs fail to start, and so the test.
 #
-#   cmake -DBUILD_DIR=<build> -DCONFIG=<Release> -DWORK_DIR=<scratch> -P TestPackageRuns.cmake
+#   cmake -DBUILD_DIR=<build> -DCONFIG=<Release> -DWORK_DIR=<scratch> [-DEXPECT_WEB=ON]
+#         [-DEXPECT_WEBVIEW2_LOADER=ON] -P TestPackageRuns.cmake
+#
+# With EXPECT_WEB, the release must also hold scraps_web.exe and the built UI
+# (ui/index.html and its assets); with EXPECT_WEBVIEW2_LOADER (MinGW), the
+# WebView2Loader.dll it loads.
 
 foreach(var BUILD_DIR WORK_DIR)
   if(NOT ${var})
@@ -31,6 +36,20 @@ foreach(file scraps_client.exe scraps_server.exe README.txt scenes)
     message(FATAL_ERROR "the install has no ${file}")
   endif()
 endforeach()
+if(EXPECT_WEB)
+  foreach(file scraps_web.exe ui/index.html)
+    if(NOT EXISTS "${prefix}/${file}")
+      message(FATAL_ERROR "the install has no ${file}")
+    endif()
+  endforeach()
+  file(GLOB ui_scripts "${prefix}/ui/assets/*.js")
+  if(NOT ui_scripts)
+    message(FATAL_ERROR "the install's ui/ folder has no script")
+  endif()
+endif()
+if(EXPECT_WEBVIEW2_LOADER AND NOT EXISTS "${prefix}/WebView2Loader.dll")
+  message(FATAL_ERROR "the install has no WebView2Loader.dll")
+endif()
 file(GLOB scenes "${prefix}/scenes/*.scene")
 if(NOT scenes)
   message(FATAL_ERROR "the install's scenes/ folder has no .scene file")

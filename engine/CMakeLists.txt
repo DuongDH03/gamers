@@ -126,7 +126,43 @@ scraps_target_defaults(scraps_dynlib)
 
 if(SCRAPS_SDL3_TARGET)
   add_library(scraps_sdl3 STATIC
-    backends/sdl3/sdl3_backend.cpp)
+    backends/sdl3/sdl3_backend.cpp
+    backends/sdl3/sdl3_devices.cpp
+    backends/sdl3/sdl3_gamepad.cpp)
   target_link_libraries(scraps_sdl3 PUBLIC scraps_platform PRIVATE ${SCRAPS_SDL3_TARGET})
   scraps_target_defaults(scraps_sdl3)
+endif()
+
+# The webview2 backend (UI layout A). Its window-independent half (the frame
+# format, the batch renderer, page input and the UI link) is plain C++ and
+# builds everywhere, so tests run it with any compiler; the window half needs
+# Windows and the WebView2 SDK (cmake/ScrapsWebView2.cmake).
+add_library(scraps_webview2_core STATIC
+  backends/webview2/batch_renderer.cpp
+  backends/webview2/frame_format.cpp
+  backends/webview2/page_input.cpp
+  backends/webview2/page_link.cpp)
+target_link_libraries(scraps_webview2_core PUBLIC scraps_platform)
+scraps_target_defaults(scraps_webview2_core)
+
+if(SCRAPS_WEBVIEW2_SDK)
+  # renderer.js goes inside the program (kRendererJs), regenerated when it changes.
+  set(scraps_renderer_js_header "${SCRAPS_GENERATED_DIR}/backends/webview2/renderer_js.h")
+  add_custom_command(
+    OUTPUT "${scraps_renderer_js_header}"
+    COMMAND ${CMAKE_COMMAND} -DINPUT=${SCRAPS_ENGINE_DIR}/backends/webview2/renderer.js
+            -DOUTPUT=${scraps_renderer_js_header} -DNAME=kRendererJs
+            -P ${PROJECT_SOURCE_DIR}/cmake/ScrapsEmbedFile.cmake
+    DEPENDS backends/webview2/renderer.js ${PROJECT_SOURCE_DIR}/cmake/ScrapsEmbedFile.cmake
+    COMMENT "Embedding renderer.js"
+    VERBATIM)
+  add_library(scraps_webview2 STATIC
+    backends/webview2/webview2_backend.cpp
+    "${scraps_renderer_js_header}")
+  target_include_directories(scraps_webview2 PRIVATE "${SCRAPS_GENERATED_DIR}")
+  target_link_libraries(scraps_webview2 PUBLIC scraps_webview2_core PRIVATE scraps_webview2_sdk ole32 shlwapi shell32
+                                                                         user32 uuid)
+  # Windows 10 APIs (per-monitor DPI); WebView2 needs Windows 10 anyway.
+  target_compile_definitions(scraps_webview2 PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00 UNICODE _UNICODE)
+  scraps_target_defaults(scraps_webview2)
 endif()

@@ -49,6 +49,9 @@ struct ClientOptions {
   bool hot_game = false;  // load the game module and reload it when it is rebuilt
   // Where quick saves go; empty: the player's folder (SDL), or "saves/" headless.
   std::string save_dir;
+  // The debug text at the top (scene, tick, fps, keys, notices). A host with
+  // an HTML UI (scraps_web) turns it off unless asked (--debug-hud).
+  bool debug_hud = true;
 };
 
 // Counts for the headless summary and for tests.

@@ -1201,3 +1201,236 @@ executable; give --scene-dir)" and names that path in the error.
 a non-ASCII path on the client's command line (not wired yet, see M4);
 Linux (the non-Windows branches of `utf8_to_path`, `utf8_arguments` and
 `directory_of` were compiled by neither preset).
+
+## Results, part 6 (agent 6, WebView2 backend)
+
+Built 2026-11-14 on branch `worktree-agent-a228fd925161f5e66` (from
+`d35b0e2`). `mingw` and `msvc` both build with zero warnings, and `ctest`
+passes 36 of 36 on both (158 unit test functions, 9 of them new; new CTest
+tests: `unit_webview2`, `webview2_renderer_js`, `ui_tests`,
+`web_window_self_test`).
+
+**What exists now**
+
+- **`engine/backends/webview2/`**, a new backend (layout A). It includes only
+  `platform/` headers, `<windows.h>` and the WebView2 SDK, and
+  `CheckLayers.cmake` has a rule for it. Two libraries:
+  - `scraps_webview2_core`, plain C++ that builds everywhere and is what
+    the tests run: `frame_format` (the shared-buffer layout, an encoder and a
+    checking decoder), `BatchRenderer` (a `Renderer2D` that records frames),
+    `PageInput` (`Input` from the page's messages), `PageUi` (`UiHost`) and
+    `FrameFlow` (which frames may go into which slot), plus `debug_font.h`
+    (SDL's public-domain 8x8 font, so `draw_debug_text` looks the same).
+  - `scraps_webview2` (Windows + SDK): `WebView2Platform`, a Win32 window
+    with a WebView2 controller. It implements `Window` (message pump, close,
+    title, resize, DPI change) and hands out the core's `Input`,
+    `Renderer2D` and `UiHost`. `renderer.js` is compiled in
+    (`cmake/ScrapsEmbedFile.cmake` → `kRendererJs`) and injected with
+    `AddScriptToExecuteOnDocumentCreated`.
+- **`renderer.js`** (the backend's, not the React app's): the WebGL2
+  renderer, frame pacing and input forwarding in the page.
+- **`engine/backends/sdl3/`**: `GamepadReader` (the pad code moved out of
+  `Sdl3Platform`, unchanged in behaviour) and `Sdl3Devices`, SDL audio and
+  gamepad with no SDL window.
+- **`apps/web/` → `scraps_web.exe`**, a GUI-subsystem program (no console
+  window; it writes to the console it was started from). It runs `ClientApp`
+  with the webview2 window, input, renderer and UI, and `Sdl3Devices` for
+  sound and the pad. It starts on the main menu.
+- **`ClientOptions::debug_hud`** (default on): `scraps_web` turns the debug
+  text off unless `--debug-hud`.
+- **Build**: `cmake/ScrapsWebView2.cmake` (the SDK) and `cmake/ScrapsUi.cmake`
+  (`SCRAPS_BUILD_UI`, default ON: `npm ci` when `package.json` or the lock
+  file change, `npm run build` when anything in `ui/` changes, into
+  `<build>/ui/dist`, so two presets never overwrite each other). The install
+  adds `scraps_web.exe`, `ui/` and, with MinGW, `WebView2Loader.dll`;
+  `package_runs` checks they are there; the release README has a paragraph
+  on `scraps_web.exe`.
+
+**The WebView2 SDK**: `Microsoft.Web.WebView2` **1.0.4314.35** from
+nuget.org (MIT), `URL_HASH SHA256=90778DEB1B77E36292828B4B5833C9255C27533F40E0DDD55891AE718944EDC4`,
+with the headers included as SYSTEM headers.
+
+- **MSVC** links `WebView2LoaderStatic.lib`, so nothing extra ships.
+- **MinGW builds `scraps_web` too**, with zero warnings. The SDK headers
+  are plain COM and compile with GCC; interface ids are parsed at compile
+  time from the uuids (GCC has no `__uuidof`), and the callbacks are small
+  hand-written COM objects (no WRL). The static loader is MSVC-only, so
+  MinGW loads `WebView2Loader.dll` at run time; it is copied next to the exe
+  and installed with it.
+
+**Choices**
+
+- **Frames.** Each frame's `Renderer2D` calls become one byte stream
+  (`frame_format.h`): texture uploads first, then clear, triangle batches
+  and lines in painter's order. Calls in a row that share a texture are
+  merged into one batch, and vertices are 20 bytes. The stream is copied
+  into one of three slots of an `ICoreWebView2SharedBuffer` and announced
+  with a ~20-byte text message `"\x01f <seq> <slot> <generation> <size>"`;
+  nothing else crosses as text per frame. The buffer is posted once per page
+  load, and again only if a frame outgrows it: slots start at 1 MB, and the
+  1,000-entity crowd grows them once. Textures are uploaded once; a native
+  copy is kept so a reloaded page (F5 in DevTools, Vite) gets them all
+  again. A slot is reused only once the page has drawn the frame before it,
+  so the page never reads a slot being written.
+- **Drawing.** WebGL2, no antialiasing, nearest-neighbour textures with
+  clamp, SDL's blend mode (`SRC_ALPHA, ONE_MINUS_SRC_ALPHA` for colour,
+  `ONE, ONE_MINUS_SRC_ALPHA` for alpha), and the same vertex-colour tint.
+  Frames are drawn top row first into a texture and blitted flipped to the
+  canvas. Drawn straight into the canvas (stored bottom row first under
+  ANGLE), edges that fall exactly on a pixel centre covered the row below
+  the one SDL covers. The backend sizes the canvas to its CSS size times
+  `devicePixelRatio` (exactly, with `device-pixel-content-box`).
+- **Pacing: `requestAnimationFrame`.** After drawing, the page asks for the
+  next frame (`"rf <generation> <last drawn> <width> <height>"`, which also
+  carries the canvas size). `scraps_web` waits in the message loop for that
+  request and runs `ClientApp::frame(now)` once per request, so the game
+  draws once per displayed frame, at the display's rate, and never faster
+  than the page can draw. If no request comes for 20 ms (minimised, hidden,
+  still loading), a frame runs anyway, so ticks, network and sound go on
+  (Rule 2: the fixed-step clock catches up). A timer would drift against
+  the display, and DWM's vsync is not when the page draws (the browser
+  composites on its own schedule).
+- **Input: forwarded from the page.** `renderer.js` listens to DOM keys,
+  pointer and wheel and sends short text messages (`"kd KeyW 0"`,
+  `"pm 400 300"`, `"pd 0 x y"`, `"wh 1"`, `"tx é"`, `"bl"` for focus lost).
+  It does so only while the view's `screen` is `playing` (it reads the view
+  messages too), plus **P in `paused`**.
+  - Keys are DOM `code`s (physical, like SDL scancodes); Ctrl, Alt and Meta
+    combinations are left to the browser.
+  - Pointer positions are canvas pixels; moves are sent once per animation
+    frame; a key whose "down" was sent always gets its "up".
+  - Typed text is sent for printable keys and kept natively only while
+    `start_text_input()` is on.
+  - Everything is parsed natively with fixed limits; anything malformed is
+    refused and counted. Messages from another origin are ignored, and
+    navigation away from the UI's origin is cancelled.
+- **Telling messages apart.** Page → native: text messages are the
+  backend's (input, frame requests); JSON objects are the UI's actions and
+  go into the `UiHost` inbox (`get_WebMessageAsJson`). Native → page: view
+  messages are JSON objects (`PostWebMessageAsJson`, sent again after every
+  `NavigationCompleted`). The backend's own messages start with `\x01`;
+  `renderer.js` listens before React and stops them
+  (`stopImmediatePropagation`), so the React bridge never sees them (the
+  self-test checks this).
+- **Esc.** The page owns it. `renderer.js` never forwards it, and natively
+  "Escape" has no key code, so the client's native Esc path cannot fire in
+  `scraps_web`. P and gamepad start stay native: P is forwarded as a game
+  key, start comes from SDL, and the page's gamepad code ignores start. One
+  press toggles once: the page sends `pause` or `resume` for Esc, native
+  toggles for P and start, and a stale `pause` or `resume` from the page
+  (sent before it saw the native toggle) is ignored by `UiModel`, because it
+  makes no sense on the screen it arrives at
+  (`webview2.esc_p_and_start_toggle_the_pause_menu_once`).
+- **Gamepad: SDL, not the browser Gamepad API.** `Sdl3Devices` reads the pad
+  with SDL's gamepad subsystem and no window: the same mapping database,
+  positional buttons and axis ranges as `scraps_client`, and no extra
+  latency through the page. The webview2 input uses it only while its
+  window is in front. The page still reads the pad through the Gamepad API
+  in menus, as agent 7 built it.
+- **Audio: SDL audio, no SDL window.** `Sdl3Devices` is also the `Audio`;
+  the engine still mixes (music and effects) and the device stream plays.
+  The webview2 backend itself has no SDL.
+- **Debug HUD**: off in `scraps_web` (the React HUD replaces it);
+  `--debug-hud` draws it, with SDL's font.
+- **Release and development**: development builds (`SCRAPS_HOT_RELOAD` on)
+  keep DevTools, F12, browser keys and the browser's context menu; release
+  builds turn all three off (F5 is quick save there).
+- **Window**: 1280x720 CSS pixels (scaled by the screen's DPI), centred and
+  clamped to the main screen's work area, per-monitor DPI aware.
+
+**Options of `scraps_web`**: those of `scraps_client` that make sense
+(`--scene`, `--scene-dir`, `--connect`, `--view`, `--frames`, `--threads`,
+`--hot-game`), plus `--ui-dir <dir>` (default: `ui/` next to the exe, else
+the build's `ui/dist`), `--ui-dev <url>` (the Vite dev server),
+`--debug-hud`, `--save-dir`, `--self-test` and `--screenshot <file>`.
+
+**Tests**
+
+| Test | Shows |
+|---|---|
+| `webview2.frame_round_trips` | every kind of call, batches merged, the font texture in SDL's layout, vertices back bit for bit; writes the frame for the JS test |
+| `webview2.textures_travel_once_and_again_after_a_reload` | textures wait for a frame the page takes, go once, are destroyed, and all go again after a reload |
+| `webview2.decoder_refuses_hostile_frames` | 17 targeted corruptions and 20,000 random ones: refused or inside the frame, never a crash |
+| `webview2.page_input_takes_messages_and_refuses_hostile_ones` | every message kind; text only while it is on; Esc refused; 48 hostile messages, random bytes, a flood |
+| `webview2.gamepad_counts_only_while_the_window_is_in_front` | the pad source is used only with focus |
+| `webview2.page_messages_are_told_apart` | input, frame requests, hello, probe, screenshot, and a UI action that is none of them |
+| `webview2.page_ui_keeps_the_view_and_sends_it_again` | the `UiHost` with a fake poster: kept before load, sent again after a reload, inbox in order, too long dropped and counted |
+| `webview2.frame_flow_never_writes_a_slot_the_page_may_read` | generations, acks (stale and hostile ones too), slot reuse |
+| `webview2.esc_p_and_start_toggle_the_pause_menu_once` | `ClientApp` on the page input and `PageUi`: P, a held P, Esc reaching native, the page's Esc, the P/Esc race both ways, gamepad start |
+| `webview2_renderer_js` (Node, `node --test`) | renderer.js decodes the C++ encoder's frame exactly as C++ does, also at a slot offset; damaged frames; frame messages; Esc never sent on any screen; nothing outside `playing` except P in `paused`; mouse rules; the JS key list equals the native one |
+| `ui_tests` | agent 7's Vitest suite, run from ctest once the build has installed the packages |
+| `web_window_self_test` (label `window`; 77 = skipped without the runtime) | a real window: the page loads and gets the view, its Play button is clicked, 120 frames are drawn, the canvas has the world on it, React saw none of the backend's messages; writes a canvas PNG and a window PNG |
+| `no_allocation_in_hot_path` | also 900 webview2 frames of the crowd through all three views with debug text, page input parsed and the UI host polled: 0 allocations |
+| `package_runs` | also checks `scraps_web.exe`, `ui/index.html` and its script, and `WebView2Loader.dll` (MinGW) |
+
+Mutation check: with "Escape" mapped natively, 2 C++ tests and the JS key
+list test fail.
+
+**Visual check.** `scraps_web --self-test --screenshot` was compared with a
+capture of `scraps_client`'s window at the same size and scene, over the
+area that neither UI covers:
+
+| Scene | Pixels identical |
+|---|---|
+| `top-down` | **100.00 %** |
+| `side` | 99.91 % |
+| `isometric` | 99.98 % |
+
+The remaining pixels are the spinning coins' animation frame, which
+depends on when each picture was taken. With `--debug-hud` the debug text
+matches SDL's too. The `crowd` scene (frames of about 1.25 MB, which grow
+the shared buffer) draws as well.
+
+**Also checked by driving the real window with OS input** (`keybd_event`,
+`mouse_event`):
+- Enter on the main menu plays; D walks, and the camera follows.
+- Esc opens and closes the pause menu (React); P opens and closes it
+  (native).
+- The pointer's hover outline follows the mouse, and the wheel zooms.
+- A left click reaches the game as a click. The sandbox places a coin only
+  when the player has one, so none appeared.
+- F5 saves ("saved to ...").
+- `--ui-dev` against the Vite dev server passes the self-test too.
+
+**What you should try by hand**
+
+1. `cmake --build --preset msvc` (or `mingw`), then run
+   `build/msvc/apps/web/Release/scraps_web.exe` (MinGW:
+   `build/mingw/apps/web/scraps_web.exe`). The window opens on the main menu.
+2. Mouse and keys in the menus: arrows, Enter, Settings, the sliders, Back.
+3. Play: WASD or arrows, Space, E, V (view), - and = and the wheel (zoom),
+   a left click near the player after picking up a coin, and the HUD's Drop
+   coin button.
+4. Esc (pause menu), Esc again, P (pause menu), P again; Save and Load in
+   the pause menu, F5 and F9 while playing; Quit, then Continue on the next
+   start.
+5. A gamepad: the stick and d-pad move, south jumps, west drops a coin,
+   start pauses. In the menus the d-pad moves and south activates (the
+   page); start closes the pause menu. Switch to another window while
+   holding the stick: the player stops.
+6. Sound: the music and effects play, the volume sliders change both, and
+   pausing ducks the music.
+7. Resize the window, maximise it, and move it to a screen with another
+   scale (125 %, 150 %): the world stays sharp, and a click lands where the
+   pointer is.
+8. A development build: F12 opens DevTools. F5 in a menu reloads the page
+   and the game carries on (the page gets the view and the textures again).
+   Run `npm run dev` in `ui/` and `scraps_web --ui-dev
+   http://localhost:5173/`, then edit a screen: it updates in the game window.
+9. A release build (`cmake --workflow --preset release-msvc`): no DevTools,
+   F5 saves instead of reloading, no context menu; the zip has
+   `scraps_web.exe` and `ui/`.
+
+**Not verified**
+
+- A gamepad: none is attached here. The SDL pad code is the same as
+  `scraps_client`'s (moved, not changed), but reading pads with no SDL
+  window was not tried with a real pad.
+- Sound was not listened to (the audio stream opens; the mixer is tested).
+- Release builds (`release-mingw`, `release-msvc`) were not built; only the
+  development presets were.
+- A second monitor or another DPI: this PC has one screen at 125 %. In this
+  desktop session new windows (SDL's too) are moved into a fixed area, so
+  the windows here were 893x785 pixels, not 1280x720 CSS pixels.
+- IME text input, and the `tx` path with a real text field (no game has one).
+- High display rates (120 Hz and up) and a GPU-bound page.

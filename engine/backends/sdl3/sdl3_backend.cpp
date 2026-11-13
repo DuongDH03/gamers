@@ -68,66 +68,6 @@ bool to_mouse_button(Uint8 sdl_button, std::size_t& slot) {
   }
 }
 
-// SDL's gamepad buttons are positional too (SOUTH is the bottom face
-// button), so the names map one to one. Buttons the engine does not know
-// (guide, paddles, touchpad, misc) are ignored.
-bool to_pad_button(Uint8 sdl_button, std::size_t& slot) {
-  GamepadButton button = GamepadButton::kCount;
-  switch (static_cast<SDL_GamepadButton>(sdl_button)) {
-    case SDL_GAMEPAD_BUTTON_SOUTH: button = GamepadButton::kSouth; break;
-    case SDL_GAMEPAD_BUTTON_EAST: button = GamepadButton::kEast; break;
-    case SDL_GAMEPAD_BUTTON_WEST: button = GamepadButton::kWest; break;
-    case SDL_GAMEPAD_BUTTON_NORTH: button = GamepadButton::kNorth; break;
-    case SDL_GAMEPAD_BUTTON_DPAD_UP: button = GamepadButton::kDpadUp; break;
-    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: button = GamepadButton::kDpadDown; break;
-    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: button = GamepadButton::kDpadLeft; break;
-    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: button = GamepadButton::kDpadRight; break;
-    case SDL_GAMEPAD_BUTTON_START: button = GamepadButton::kStart; break;
-    case SDL_GAMEPAD_BUTTON_BACK: button = GamepadButton::kBack; break;
-    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: button = GamepadButton::kLeftShoulder; break;
-    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: button = GamepadButton::kRightShoulder; break;
-    case SDL_GAMEPAD_BUTTON_LEFT_STICK: button = GamepadButton::kLeftStick; break;
-    case SDL_GAMEPAD_BUTTON_RIGHT_STICK: button = GamepadButton::kRightStick; break;
-    default: return false;
-  }
-  slot = static_cast<std::size_t>(button);
-  return true;
-}
-
-SDL_GamepadButton to_sdl_pad_button(GamepadButton button) {
-  switch (button) {
-    case GamepadButton::kSouth: return SDL_GAMEPAD_BUTTON_SOUTH;
-    case GamepadButton::kEast: return SDL_GAMEPAD_BUTTON_EAST;
-    case GamepadButton::kWest: return SDL_GAMEPAD_BUTTON_WEST;
-    case GamepadButton::kNorth: return SDL_GAMEPAD_BUTTON_NORTH;
-    case GamepadButton::kDpadUp: return SDL_GAMEPAD_BUTTON_DPAD_UP;
-    case GamepadButton::kDpadDown: return SDL_GAMEPAD_BUTTON_DPAD_DOWN;
-    case GamepadButton::kDpadLeft: return SDL_GAMEPAD_BUTTON_DPAD_LEFT;
-    case GamepadButton::kDpadRight: return SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
-    case GamepadButton::kStart: return SDL_GAMEPAD_BUTTON_START;
-    case GamepadButton::kBack: return SDL_GAMEPAD_BUTTON_BACK;
-    case GamepadButton::kLeftShoulder: return SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;
-    case GamepadButton::kRightShoulder: return SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
-    case GamepadButton::kLeftStick: return SDL_GAMEPAD_BUTTON_LEFT_STICK;
-    case GamepadButton::kRightStick: return SDL_GAMEPAD_BUTTON_RIGHT_STICK;
-    default: return SDL_GAMEPAD_BUTTON_INVALID;
-  }
-}
-
-// GamepadAxis is in SDL's order (left x/y, right x/y, left/right trigger);
-// anything SDL may add later is ignored.
-bool to_pad_axis(Uint8 sdl_axis, std::size_t& slot) {
-  if (sdl_axis >= static_cast<Uint8>(GamepadAxis::kCount)) return false;
-  slot = sdl_axis;
-  return true;
-}
-
-// Sticks are -32768..32767, triggers 0..32767: both become -1..1 (0..1).
-float axis_value(Sint16 value) {
-  const float v = static_cast<float>(value) / 32767.0f;
-  return v < -1.0f ? -1.0f : v;
-}
-
 SDL_FColor to_fcolor(Color color) {
   SDL_FColor result;
   result.r = static_cast<float>(color.r) / 255.0f;
@@ -170,7 +110,7 @@ std::unique_ptr<Sdl3Platform> Sdl3Platform::create(const WindowDesc& desc, std::
   }
   // Gamepads are optional too. A pad already plugged in is opened now; one
   // plugged in later arrives as SDL_EVENT_GAMEPAD_ADDED.
-  if (SDL_InitSubSystem(SDL_INIT_GAMEPAD)) platform->open_any_gamepad();
+  if (SDL_InitSubSystem(SDL_INIT_GAMEPAD)) platform->m_pad.open_any();
   return platform;
 }
 
@@ -178,7 +118,7 @@ Sdl3Platform::~Sdl3Platform() {
   for (SDL_Texture* texture : m_textures) {
     if (texture != nullptr) SDL_DestroyTexture(texture);
   }
-  close_gamepad();
+  m_pad.close();  // before SDL_Quit
   if (m_audio != nullptr) SDL_DestroyAudioStream(m_audio);
   if (m_renderer != nullptr) SDL_DestroyRenderer(m_renderer);
   if (m_window != nullptr) SDL_DestroyWindow(m_window);
@@ -201,14 +141,14 @@ void Sdl3Platform::pump_events() {
   m_button_pressed.fill(false);
   m_button_released.fill(false);
   m_wheel = 0.0f;
-  m_pad_pressed.fill(false);
-  m_pad_released.fill(false);
+  m_pad.begin_frame();
   m_events.clear();
   SDL_Event event;
   std::size_t button = 0;
   InputEvent item;  // the event list's entry for the SDL event at hand
   while (SDL_PollEvent(&event)) {
     item = InputEvent();
+    if (m_pad.handle(event, m_events)) continue;  // pads come and go, buttons, axes
     switch (event.type) {
       case SDL_EVENT_QUIT:
       case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -283,45 +223,12 @@ void Sdl3Platform::pump_events() {
         // its release here; do not leave it stuck down. The same for the
         // gamepad: SDL sends no pad events to a window in the background.
         m_button_down.fill(false);
-        clear_gamepad_state();
+        m_pad.clear_state();
         break;
       case SDL_EVENT_WINDOW_FOCUS_GAINED:
         // Whatever is held now (a stick pushed while switching back) counts,
         // without a "pressed": that press happened elsewhere.
-        read_gamepad_state();
-        break;
-      case SDL_EVENT_GAMEPAD_ADDED:
-        if (m_pad == nullptr) open_any_gamepad();
-        break;
-      case SDL_EVENT_GAMEPAD_REMOVED:
-        if (m_pad != nullptr && event.gdevice.which == m_pad_id) {
-          close_gamepad();
-          open_any_gamepad();  // another pad that is still plugged in takes over
-        }
-        break;
-      case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-      case SDL_EVENT_GAMEPAD_BUTTON_UP:
-        if (m_pad != nullptr && event.gbutton.which == m_pad_id && to_pad_button(event.gbutton.button, button)) {
-          if (event.gbutton.down) {
-            if (!m_pad_down[button]) {
-              m_pad_pressed[button] = true;
-              item.type = InputEventType::kPadDown;
-              item.pad = static_cast<GamepadButton>(button);
-              m_events.push(item);
-            }
-          } else if (m_pad_down[button]) {
-            m_pad_released[button] = true;
-            item.type = InputEventType::kPadUp;
-            item.pad = static_cast<GamepadButton>(button);
-            m_events.push(item);
-          }
-          m_pad_down[button] = event.gbutton.down;
-        }
-        break;
-      case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        if (m_pad != nullptr && event.gaxis.which == m_pad_id && to_pad_axis(event.gaxis.axis, button)) {
-          m_axes[button] = axis_value(event.gaxis.value);
-        }
+        m_pad.read_state();
         break;
       default:
         break;
@@ -336,45 +243,6 @@ void Sdl3Platform::set_pointer(float window_x, float window_y) {
   if (!std::isfinite(x) || !std::isfinite(y)) return;
   m_pointer.x = x;
   m_pointer.y = y;
-}
-
-bool Sdl3Platform::open_any_gamepad() {
-  if (m_pad != nullptr) return true;
-  int count = 0;
-  SDL_JoystickID* ids = SDL_GetGamepads(&count);  // allocates; only when a pad comes or goes
-  if (ids == nullptr) return false;
-  for (int i = 0; i < count && m_pad == nullptr; ++i) {
-    m_pad = SDL_OpenGamepad(ids[i]);
-    if (m_pad != nullptr) m_pad_id = ids[i];
-  }
-  SDL_free(ids);
-  clear_gamepad_state();
-  read_gamepad_state();
-  return m_pad != nullptr;
-}
-
-void Sdl3Platform::read_gamepad_state() {
-  if (m_pad == nullptr) return;
-  for (std::size_t i = 0; i < kPadButtons; ++i) {
-    m_pad_down[i] = SDL_GetGamepadButton(m_pad, to_sdl_pad_button(static_cast<GamepadButton>(i)));
-  }
-  for (std::size_t i = 0; i < kPadAxes; ++i) {
-    m_axes[i] = axis_value(SDL_GetGamepadAxis(m_pad, static_cast<SDL_GamepadAxis>(i)));
-  }
-}
-
-void Sdl3Platform::close_gamepad() {
-  if (m_pad != nullptr) SDL_CloseGamepad(m_pad);
-  m_pad = nullptr;
-  m_pad_id = 0;
-  clear_gamepad_state();
-}
-
-void Sdl3Platform::clear_gamepad_state() {
-  m_pad_down.fill(false);
-  m_pad_pressed.fill(false);
-  m_pad_released.fill(false);
-  m_axes.fill(0.0f);
 }
 
 void Sdl3Platform::set_title(const char* title) { SDL_SetWindowTitle(m_window, title); }
@@ -413,26 +281,6 @@ bool Sdl3Platform::was_pressed(MouseButton button) const {
 bool Sdl3Platform::was_released(MouseButton button) const {
   const std::size_t i = static_cast<std::size_t>(button);
   return i < m_button_released.size() && m_button_released[i];
-}
-
-bool Sdl3Platform::is_down(GamepadButton button) const {
-  const std::size_t i = static_cast<std::size_t>(button);
-  return i < m_pad_down.size() && m_pad_down[i];
-}
-
-bool Sdl3Platform::was_pressed(GamepadButton button) const {
-  const std::size_t i = static_cast<std::size_t>(button);
-  return i < m_pad_pressed.size() && m_pad_pressed[i];
-}
-
-bool Sdl3Platform::was_released(GamepadButton button) const {
-  const std::size_t i = static_cast<std::size_t>(button);
-  return i < m_pad_released.size() && m_pad_released[i];
-}
-
-float Sdl3Platform::axis(GamepadAxis axis) const {
-  const std::size_t i = static_cast<std::size_t>(axis);
-  return i < m_axes.size() ? m_axes[i] : 0.0f;
 }
 
 // ---------------------------------------------------------------- Renderer2D

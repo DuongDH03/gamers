@@ -645,26 +645,28 @@ bool ClientApp::frame(double now, double wall_seconds) {
   for (const Entity& entity : world.entities) {
     if (entity.alive && entity.player != kNoPlayer) ++players;
   }
-  // A dark strip behind the HUD keeps the text readable over bright art.
-  RectF hud_strip;
-  hud_strip.w = static_cast<float>(renderer.output_width());
-  hud_strip.h = now < s.notice_until ? 66.0f : 52.0f;
-  renderer.fill_rect(hud_strip, Color(0, 0, 0, 150));
-  char line[256];
-  std::snprintf(line, sizeof(line), "Scraps  %s  scene %s  view %s  tick %u  %.0f fps",
-                session.server ? "offline" : options.connect.c_str(),
-                client.scene_name().empty() ? "-" : client.scene_name().c_str(), s.view ? s.view->name() : "-",
-                static_cast<unsigned>(world.tick), s.fps);
-  renderer.draw_debug_text(10.0f, 10.0f, line, Color(240, 240, 240));
-  std::snprintf(line, sizeof(line), "%s  players %d  %s  rtt %.0f ms  unacked inputs %u",
-                client_state_name(client.state()), players, s.game_hud, client.round_trip_seconds() * 1000.0,
-                static_cast<unsigned>(client.unacknowledged_inputs()));
-  renderer.draw_debug_text(10.0f, 24.0f, line, Color(200, 200, 210));
-  renderer.draw_debug_text(10.0f, 38.0f,
-                           "WASD/stick move  Space/south jump  E/west drop coin  Click place coin  V view  "
-                           "-/= wheel zoom  P/start pause  F5 save  F9 load  Esc quit",
-                           Color(150, 150, 165));
-  if (now < s.notice_until) renderer.draw_debug_text(10.0f, 52.0f, s.notice.c_str(), Color(255, 220, 120));
+  if (options.debug_hud) {
+    // A dark strip behind the HUD keeps the text readable over bright art.
+    RectF hud_strip;
+    hud_strip.w = static_cast<float>(renderer.output_width());
+    hud_strip.h = now < s.notice_until ? 66.0f : 52.0f;
+    renderer.fill_rect(hud_strip, Color(0, 0, 0, 150));
+    char line[256];
+    std::snprintf(line, sizeof(line), "Scraps  %s  scene %s  view %s  tick %u  %.0f fps",
+                  session.server ? "offline" : options.connect.c_str(),
+                  client.scene_name().empty() ? "-" : client.scene_name().c_str(), s.view ? s.view->name() : "-",
+                  static_cast<unsigned>(world.tick), s.fps);
+    renderer.draw_debug_text(10.0f, 10.0f, line, Color(240, 240, 240));
+    std::snprintf(line, sizeof(line), "%s  players %d  %s  rtt %.0f ms  unacked inputs %u",
+                  client_state_name(client.state()), players, s.game_hud, client.round_trip_seconds() * 1000.0,
+                  static_cast<unsigned>(client.unacknowledged_inputs()));
+    renderer.draw_debug_text(10.0f, 24.0f, line, Color(200, 200, 210));
+    renderer.draw_debug_text(10.0f, 38.0f,
+                             "WASD/stick move  Space/south jump  E/west drop coin  Click place coin  V view  "
+                             "-/= wheel zoom  P/start pause  F5 save  F9 load  Esc quit",
+                             Color(150, 150, 165));
+    if (now < s.notice_until) renderer.draw_debug_text(10.0f, 52.0f, s.notice.c_str(), Color(255, 220, 120));
+  }
   if (s.pause.paused() && !s.ui_present) {
     // Without a UI there is no pause menu: say how to resume.
     const char* text = "Paused - P to resume";

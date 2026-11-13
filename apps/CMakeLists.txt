@@ -42,6 +42,8 @@ scraps_target_defaults(scraps_ui_model)
 
 scraps_add_server(scraps_server ${SCRAPS_GAME})
 scraps_add_client(scraps_client ${SCRAPS_GAME})
+# The client with the React UI in a WebView2 window (UI layout A).
+add_subdirectory(web)
 
 # The bench measures the sandbox's rules on the sandbox's scenes.
 add_executable(scraps_bench bench/main.cpp)

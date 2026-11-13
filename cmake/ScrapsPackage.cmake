@@ -2,6 +2,8 @@
 # part 5): `cmake --install` lays it out, CPack zips it.
 #
 #   <prefix>/scraps_client.exe, scraps_server.exe
+#            scraps_web.exe and ui/ (the React UI), plus WebView2Loader.dll
+#            with MinGW, when scraps_web is built (apps/web/CMakeLists.txt)
 #            the DLLs they need that Windows does not have: the compiler's
 #            runtime (MinGW: libstdc++-6, libgcc_s_seh-1, libwinpthread-1;
 #            MSVC: the VC runtime) and SDL3.dll when SDL3 is a shared library
@@ -66,8 +68,12 @@ if(WIN32)
   if(TARGET SDL3::SDL3-shared)
     list(APPEND scraps_runtime_dirs "$<TARGET_FILE_DIR:SDL3::SDL3-shared>")
   endif()
+  set(scraps_runtime_executables "$<TARGET_FILE:scraps_client>;$<TARGET_FILE:scraps_server>")
+  if(TARGET scraps_web)
+    string(APPEND scraps_runtime_executables ";$<TARGET_FILE:scraps_web>")  # apps/web/CMakeLists.txt installs it
+  endif()
   install(CODE "
-    set(SCRAPS_RUNTIME_EXECUTABLES \"$<TARGET_FILE:scraps_client>;$<TARGET_FILE:scraps_server>\")
+    set(SCRAPS_RUNTIME_EXECUTABLES \"${scraps_runtime_executables}\")
     set(SCRAPS_RUNTIME_DIRS \"${scraps_runtime_dirs}\")
     set(SCRAPS_RUNTIME_TOOL \"${scraps_runtime_tool}\")
     set(SCRAPS_RUNTIME_COMMAND \"${scraps_runtime_command}\")
