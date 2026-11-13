@@ -17,8 +17,12 @@
 #include <new>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "backends/headless/headless_backend.h"
+#include "backends/webview2/batch_renderer.h"
+#include "backends/webview2/page_input.h"
+#include "backends/webview2/page_link.h"
 #include "common/game_module.h"
 #include "common/pause.h"
 #include "common/ui_model.h"
@@ -39,6 +43,22 @@
 
 namespace {
 std::atomic<long> g_allocations{0};
+
+// The webview2 backend's side of a frame (UI layout A), without the window:
+// frames copied into a slot as the backend copies them into its shared buffer.
+class SlotSink final : public scraps::webview2::FrameSink {
+ public:
+  explicit SlotSink(std::size_t capacity) : m_slot(capacity) {}
+  bool can_take_frame() const override { return true; }
+  bool take_frame(const std::uint8_t* bytes, std::size_t size, std::uint32_t) override {
+    if (size > m_slot.size()) return false;
+    std::memcpy(m_slot.data(), bytes, size);
+    return true;
+  }
+
+ private:
+  std::vector<std::uint8_t> m_slot;
+};
 }
 
 void* operator new(std::size_t size) {
@@ -338,6 +358,59 @@ int main() {
   }
   if (pause_allocations != 0) {
     std::printf("FAILED: pausing allocates\n");
+    return 1;
+  }
+
+  // The webview2 render path (spec 2026-11-14, part 6, layout A): the crowd
+  // drawn through every view into the batch renderer, with debug text, the
+  // frame copied into a slot, the page's input messages parsed and applied,
+  // and the UI host polled with nothing new: nothing allocates after warm-up.
+  long web_allocations = 0;
+  {
+    SlotSink sink(std::size_t{32} * 1024 * 1024);
+    webview2::BatchRenderer web_renderer(&sink);
+    web_renderer.set_output_size(1280, 720);
+    SpriteBank web_sprites;
+    if (!web_sprites.load(world.level, SCRAPS_SANDBOX_SCENE_DIR, web_renderer, errors)) {
+      std::printf("FAILED: %s\n", errors.c_str());
+      return 1;
+    }
+    webview2::PageInput page_input;
+    webview2::PageUi page_ui(nullptr);
+    UiMessageList page_messages;
+    const char* const page_said[] = {"kd KeyW 0", "pm 400.5 300", "pd 0 401 301", "wh -1", "pu 0 402 302",
+                                     "ku KeyW",   "tx a",         "kd Escape 0", "pm nan 1"};
+    auto web_frames = [&](int count) {
+      for (int f = 0; f < count; ++f) {
+        for (const char* text : page_said) page_input.queue(text, std::strlen(text));
+        page_input.pump(true);
+        page_ui.receive(page_messages);
+        for (std::unique_ptr<View>& view : views) {
+          web_renderer.begin_frame(Color(10, 20, 30));
+          view->draw(previous, world, 0.5f, camera, web_renderer, &web_sprites);
+          web_renderer.draw_debug_text(10.0f, 10.0f, "Scraps  offline  scene crowd  tick 123  60 fps",
+                                       Color(240, 240, 240));
+          web_renderer.end_frame();
+        }
+      }
+    };
+    web_frames(30);  // warm-up: the frame buffers grow to the crowd's size
+    const long sent_before = static_cast<long>(web_renderer.frames_sent());
+    const long before_web = g_allocations.load();
+    web_frames(300);
+    web_allocations = g_allocations.load() - before_web;
+    const long sent = static_cast<long>(web_renderer.frames_sent()) - sent_before;
+    std::printf("%ld allocations in 900 webview2 frames (crowd, %ld frames sent, last %lu bytes, %lu page messages "
+                "refused)\n",
+                web_allocations, sent, static_cast<unsigned long>(web_renderer.last_frame().size()),
+                static_cast<unsigned long>(page_input.rejected()));
+    if (sent != 900 || page_input.rejected() != 660) {
+      std::printf("FAILED: the webview2 frames were not all sent, or the page's messages were not all read\n");
+      return 1;
+    }
+  }
+  if (web_allocations != 0) {
+    std::printf("FAILED: the webview2 render path allocates\n");
     return 1;
   }
   if (allocations != 0) {

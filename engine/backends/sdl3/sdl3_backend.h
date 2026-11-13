@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "backends/sdl3/sdl3_gamepad.h"
 #include "platform/audio.h"
 #include "platform/input.h"
 #include "platform/renderer2d.h"
@@ -19,7 +20,6 @@ struct SDL_Renderer;
 struct SDL_AudioStream;
 struct SDL_Texture;
 struct SDL_Vertex;
-struct SDL_Gamepad;
 
 namespace scraps::sdl3 {
 
@@ -58,11 +58,11 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   bool was_pressed(MouseButton button) const override;
   bool was_released(MouseButton button) const override;
   float wheel() const override { return m_wheel; }
-  bool gamepad_connected() const override { return m_pad != nullptr; }
-  bool is_down(GamepadButton button) const override;
-  bool was_pressed(GamepadButton button) const override;
-  bool was_released(GamepadButton button) const override;
-  float axis(GamepadAxis axis) const override;
+  bool gamepad_connected() const override { return m_pad.connected(); }
+  bool is_down(GamepadButton button) const override { return m_pad.is_down(button); }
+  bool was_pressed(GamepadButton button) const override { return m_pad.was_pressed(button); }
+  bool was_released(GamepadButton button) const override { return m_pad.was_released(button); }
+  float axis(GamepadAxis axis) const override { return m_pad.axis(axis); }
   const InputEventList& events() const override { return m_events; }
   // SDL_StartTextInput / SDL_StopTextInput on this window; typed text comes
   // as SDL_EVENT_TEXT_INPUT and becomes kText events.
@@ -90,12 +90,6 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   void set_draw_color(Color color);
   // Window points (from an event) to renderer output pixels.
   void set_pointer(float window_x, float window_y);
-  // Opens the first connected gamepad if none is open. Returns true if one is open afterwards.
-  bool open_any_gamepad();
-  // Takes the open pad's current buttons and axes (no "pressed" for what is already held).
-  void read_gamepad_state();
-  void close_gamepad();
-  void clear_gamepad_state();
 
   SDL_Window* m_window = nullptr;
   SDL_Renderer* m_renderer = nullptr;
@@ -109,15 +103,7 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   std::array<bool, kButtons> m_button_pressed{};
   std::array<bool, kButtons> m_button_released{};
   float m_wheel = 0.0f;
-  // The gamepad being read (the first one connected), or nullptr.
-  static constexpr std::size_t kPadButtons = static_cast<std::size_t>(GamepadButton::kCount);
-  static constexpr std::size_t kPadAxes = static_cast<std::size_t>(GamepadAxis::kCount);
-  SDL_Gamepad* m_pad = nullptr;
-  std::uint32_t m_pad_id = 0;  // its SDL_JoystickID
-  std::array<bool, kPadButtons> m_pad_down{};
-  std::array<bool, kPadButtons> m_pad_pressed{};
-  std::array<bool, kPadButtons> m_pad_released{};
-  std::array<float, kPadAxes> m_axes{};
+  GamepadReader m_pad;  // the first gamepad connected
   InputEventList m_events;  // this frame's, refilled by pump_events()
   std::vector<SDL_Vertex> m_vertices;  // reused conversion buffer
   std::vector<SDL_Texture*> m_textures;  // index = TextureId - 1; nullptr once destroyed

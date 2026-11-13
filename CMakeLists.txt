@@ -22,6 +22,7 @@ set(SCRAPS_GAME "sandbox" CACHE STRING "The game scraps_client and scraps_server
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ScrapsWarnings)
 include(ScrapsSDL3)
+include(ScrapsWebView2)
 include(ScrapsGame)
 
 enable_testing()
@@ -33,6 +34,7 @@ if(SCRAPS_BUILD_TESTS)
   add_subdirectory(tests/tiny_game)
 endif()
 scraps_select_game()
+include(ScrapsUi)
 add_subdirectory(apps)
 
 if(SCRAPS_BUILD_TESTS)
