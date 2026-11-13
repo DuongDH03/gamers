@@ -4,6 +4,13 @@ A scene is a plain text file: a small 3D grid of blocks plus what lives in it.
 Decided in [2026-11-12-level-model](decisions/2026-11-12-level-model.md).
 Parser: [engine/core/scene.cpp](../engine/core/scene.cpp). Errors name the line.
 
+**Where the apps look** (`apps/common/scene_dir.h`): `--scene-dir <dir>` when
+given; otherwise `scenes/` next to the executable (an installed or unzipped
+release); otherwise the game's scenes folder in the source tree, compiled in
+for development (`scraps_add_game(... SCENES <dir>)`). Both apps print the
+folder they chose at start-up. A release ships the game's whole scenes folder
+(art, sounds, music) as `scenes/`.
+
 ## Coordinates
 
 ```

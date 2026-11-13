@@ -51,4 +51,11 @@ class Library {
   void* m_handle;  // HMODULE on Windows, the dlopen handle elsewhere
 };
 
+// The folder that holds the running program's executable, as UTF-8 with
+// '/' separators ("C:/Games/Scraps"), or "" if the system cannot say. An
+// executable is a loaded module too, which is why this lives here: the apps
+// look for an installed release's scenes/ next to it (spec 2026-11-14,
+// part 5), and the OS call needs windows.h.
+std::string executable_directory();
+
 }  // namespace scraps::dynlib

@@ -1,0 +1,16 @@
+scraps-scene 1
+# The tiny test game's only scene: a fenced field, no art, no sounds.
+view top-down
+size 6 5 2
+tile g grass solid 96 164 80
+tile # fence solid 150 140 160
+archetype walker kind 1 size 0.6 0.6 0.9 color 235 90 70 speed 4 flags moves,collides
+player walker
+spawn 2.5 2.5 1
+fill 0 g
+layer 1
+######
+#....#
+#....#
+#....#
+######

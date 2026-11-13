@@ -2,8 +2,9 @@
 // Headless: it has no window, no renderer and no audio, only the simulation
 // and a UDP socket.
 //
-// The game's code comes through a GameApi (core/game_api.h): the sandbox
-// linked into this exe, or with --hot-game the sandbox module next to it,
+// The game's code comes through a GameApi (core/game_api.h): the game this
+// exe was built for (CMake's SCRAPS_GAME, through the generated
+// selected_game.h), or with --hot-game that game's module next to it,
 // swapped in again whenever it is rebuilt (common/game_module.h).
 
 #include <chrono>
@@ -14,25 +15,27 @@
 #include <utility>
 #include <vector>
 
+#include "backends/dynlib/library.h"
 #include "backends/udp/udp_net.h"
 #include "common/game_module.h"
 #include "common/random_secret.h"
 #include "common/save_game.h"
+#include "common/scene_dir.h"
 #include "common/scene_reload.h"
 #include "core/fixed_step.h"
 #include "core/jobs.h"
 #include "core/save.h"
 #include "core/scene.h"
 #include "net/server.h"
-#include "sandbox/sandbox.h"
+#include "selected_game.h"
 #include "views/view_factory.h"
 
 namespace {
 
 struct Options {
-  std::string scene = "isometric";
+  std::string scene = scraps_apps::selected_game().default_scene;
   bool scene_given = false;  // without --scene, --load plays the save's scene
-  std::string scene_dir = SCRAPS_SANDBOX_SCENE_DIR;
+  std::string scene_dir;  // --scene-dir; main() fills it in otherwise (common/scene_dir.h)
   std::string load;  // a save to start from
   std::string save;  // where to save when the server stops cleanly
   std::string bind = "0.0.0.0";
@@ -47,9 +50,10 @@ struct Options {
 
 void print_usage() {
   std::printf(
-      "usage: scraps_server [options]\n"
-      "  --scene <name>            scene to host (default: isometric)\n"
-      "  --scene-dir <dir>         where .scene files are\n"
+      "usage: scraps_server [options]           (game: %s)\n"
+      "  --scene <name>            scene to host (default: %s)\n"
+      "  --scene-dir <dir>         where .scene files are (default: scenes/ next to this\n"
+      "                            program, else the game's source folder)\n"
       "  --port <n>                UDP port (default: 7777)\n"
       "  --bind <ip>               interface to listen on (default: 0.0.0.0 = all;\n"
       "                            127.0.0.1 = this machine only)\n"
@@ -58,11 +62,13 @@ void print_usage() {
       "  --ticks <n>               stop after n ticks (default: run until Ctrl+C)\n"
       "  --threads <n>             worker threads for the simulation (default: cores - 1; 0 = none)\n"
       "  --hot-game                run the game from its module and reload it when rebuilt\n"
-      "                            (cmake --build --preset mingw-game / msvc-game)\n"
+      "                            (cmake --build --preset mingw-game / msvc-game;\n"
+      "                            development builds only)\n"
       "  --load <file>             start from a save (its scene, unless --scene is given)\n"
       "  --save <file>             save the game there when the server stops cleanly\n"
       "                            (after --ticks; Ctrl+C is not a clean stop)\n"
-      "Editing the .scene file while the server runs reloads it for everyone.\n");
+      "Editing the .scene file while the server runs reloads it for everyone.\n",
+      scraps_apps::selected_game().name, scraps_apps::selected_game().default_scene);
 }
 
 bool parse_long(const char* text, long min_value, long max_value, long& out) {
@@ -80,6 +86,11 @@ bool parse_options(int argc, char** argv, Options& options) {
     if (arg == "--help" || arg == "-h") {
       options.help = true;
     } else if (arg == "--hot-game") {
+      if (!scraps_apps::selected_game().hot_reload) {
+        // Release builds link the game statically and ship no module.
+        std::fprintf(stderr, "--hot-game is not available in this build\n");
+        return false;
+      }
       options.hot_game = true;
     } else if (!has_value) {
       std::fprintf(stderr, "unknown option or missing value: %s\n", arg.c_str());
@@ -128,19 +139,26 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  const scraps_apps::SelectedGame& selected = scraps_apps::selected_game();
+  const scraps_apps::SceneDirChoice scenes =
+      scraps_apps::choose_scene_dir(options.scene_dir, dynlib::executable_directory(), selected.source_scene_dir);
+  options.scene_dir = scenes.path;
+  std::printf("game '%s', scenes from %s (%s)\n", selected.name, scenes.path.c_str(),
+              scraps_apps::scene_dir_source_name(scenes.source));
+
   // The game's code. Declared before the Server, so it is destroyed after it:
   // a loaded module must outlive everything that calls into it.
   scraps_apps::GameModule game;
   std::string error;
   if (options.hot_game) {
-    if (!game.load(SCRAPS_GAME_MODULE_FILE, error)) {
-      std::fprintf(stderr, "error: %s\nbuild the game module with: %s\n", error.c_str(), SCRAPS_GAME_BUILD_COMMAND);
+    if (!game.load(selected.module_file, error)) {
+      std::fprintf(stderr, "error: %s\nbuild the game module with: %s\n", error.c_str(), selected.build_command);
       return 1;
     }
-    game.watch_other_builds(SCRAPS_GAME_MODULE_OTHER_BUILDS);
+    game.watch_other_builds(selected.other_builds);
     std::printf("game '%s' loaded from %s\nwatching %s; rebuild it with: %s\n", game.name(),
-                game.live_path().c_str(), SCRAPS_GAME_MODULE_FILE, SCRAPS_GAME_BUILD_COMMAND);
-  } else if (!game.use_static(sandbox::game_api(), error)) {
+                game.live_path().c_str(), selected.module_file, selected.build_command);
+  } else if (!game.use_static(scraps_apps::selected_game_api(), error)) {
     std::fprintf(stderr, "error: %s\n", error.c_str());
     return 1;
   }

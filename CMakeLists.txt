@@ -13,20 +13,34 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(SCRAPS_WITH_SDL3 "Build the SDL3 backend and the windowed client" ON)
 option(SCRAPS_FETCH_SDL3 "Download and build SDL3 when it is not installed" ON)
 option(SCRAPS_BUILD_TESTS "Build the test suite" ON)
+# Development builds let the apps run the game from a module and swap in new
+# builds (--hot-game). Release packages link the game statically only.
+option(SCRAPS_HOT_RELOAD "Apps can load the game as a hot-reloadable module (--hot-game)" ON)
+# The game the apps are built for: any game added with scraps_add_game().
+set(SCRAPS_GAME "sandbox" CACHE STRING "The game scraps_client and scraps_server are built for")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ScrapsWarnings)
 include(ScrapsSDL3)
+include(ScrapsGame)
 
 enable_testing()
 
 add_subdirectory(engine)
 add_subdirectory(games)
+if(SCRAPS_BUILD_TESTS)
+  # A second, tiny game: proves the apps run a game other than the sandbox.
+  add_subdirectory(tests/tiny_game)
+endif()
+scraps_select_game()
 add_subdirectory(apps)
 
 if(SCRAPS_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# cmake --install and CPack: the release zip (Scraps-<game>-<version>-win64.zip).
+include(ScrapsPackage)
 
 # Rule 3 is checked mechanically: the include graph must point downward only.
 add_test(NAME layer_rules
