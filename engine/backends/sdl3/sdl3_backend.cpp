@@ -485,4 +485,12 @@ std::size_t Sdl3Platform::queued_frames() const {
   return bytes > 0 ? static_cast<std::size_t>(bytes) / (2 * sizeof(float)) : 0;
 }
 
+std::string preferences_path(const char* organization, const char* application) {
+  char* path = SDL_GetPrefPath(organization, application);
+  if (path == nullptr) return std::string();
+  std::string result(path);
+  SDL_free(path);
+  return result;
+}
+
 }  // namespace scraps::sdl3

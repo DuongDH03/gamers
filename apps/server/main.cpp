@@ -12,13 +12,16 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "backends/udp/udp_net.h"
 #include "common/game_module.h"
 #include "common/random_secret.h"
+#include "common/save_game.h"
 #include "common/scene_reload.h"
 #include "core/fixed_step.h"
 #include "core/jobs.h"
+#include "core/save.h"
 #include "core/scene.h"
 #include "net/server.h"
 #include "sandbox/sandbox.h"
@@ -28,7 +31,10 @@ namespace {
 
 struct Options {
   std::string scene = "isometric";
+  bool scene_given = false;  // without --scene, --load plays the save's scene
   std::string scene_dir = SCRAPS_SANDBOX_SCENE_DIR;
+  std::string load;  // a save to start from
+  std::string save;  // where to save when the server stops cleanly
   std::string bind = "0.0.0.0";
   long port = 7777;
   long max_players = 10;
@@ -53,6 +59,9 @@ void print_usage() {
       "  --threads <n>             worker threads for the simulation (default: cores - 1; 0 = none)\n"
       "  --hot-game                run the game from its module and reload it when rebuilt\n"
       "                            (cmake --build --preset mingw-game / msvc-game)\n"
+      "  --load <file>             start from a save (its scene, unless --scene is given)\n"
+      "  --save <file>             save the game there when the server stops cleanly\n"
+      "                            (after --ticks; Ctrl+C is not a clean stop)\n"
       "Editing the .scene file while the server runs reloads it for everyone.\n");
 }
 
@@ -77,6 +86,11 @@ bool parse_options(int argc, char** argv, Options& options) {
       return false;
     } else if (arg == "--scene") {
       options.scene = argv[++i];
+      options.scene_given = true;
+    } else if (arg == "--load") {
+      options.load = argv[++i];
+    } else if (arg == "--save") {
+      options.save = argv[++i];
     } else if (arg == "--scene-dir") {
       options.scene_dir = argv[++i];
     } else if (arg == "--bind") {
@@ -131,6 +145,18 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  if (!options.load.empty()) {
+    // The save names its scene: without --scene, that is the one to host.
+    std::vector<std::uint8_t> bytes;
+    SaveHeader header;
+    if (!scraps_apps::read_save_file(options.load, bytes, error) ||
+        !read_save_header(bytes.data(), bytes.size(), header, error)) {
+      std::fprintf(stderr, "error: cannot load %s: %s\n", options.load.c_str(), error.c_str());
+      return 1;
+    }
+    if (!options.scene_given) options.scene = header.scene_name;
+  }
+
   Scene scene;
   if (!load_scene(options.scene_dir, options.scene, scene, error)) {
     std::fprintf(stderr, "error: %s\n", error.c_str());
@@ -160,6 +186,21 @@ int main(int argc, char** argv) {
   scraps_apps::GameTargets game_targets;
   game_targets.server = &server;
   scraps_apps::SceneReloader reloader(options.scene_dir, options.scene);
+  if (!options.load.empty()) {
+    // Before any client can join; players saved in it are removed at the
+    // first tick, since nobody is playing yet.
+    SaveHeader header;
+    const SaveLoad result = scraps_apps::load_game(server, game.name(), options.scene_dir, options.load, header, error);
+    if (result == SaveLoad::kRefused) {
+      std::fprintf(stderr, "error: cannot load %s: %s\n", options.load.c_str(), error.c_str());
+      return 1;
+    }
+    std::printf("loaded %s: scene '%s', tick %u\n", options.load.c_str(), header.scene_name.c_str(),
+                static_cast<unsigned>(header.tick));
+    if (result == SaveLoad::kSceneChanged) {
+      std::printf("warning: the scene file changed since this save; the level is the new one\n");
+    }
+  }
 
   std::printf("Scraps server: scene '%s' (%s), listening on %s:%ld, up to %ld players, %u worker threads\n",
               scene.name.c_str(), perspective_name(scene.level.perspective), options.bind.c_str(), options.port,
@@ -203,6 +244,13 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
-  std::printf("stopped after %ld ticks\n", ticks);
+  std::printf("stopped after %ld ticks (world tick %u)\n", ticks, static_cast<unsigned>(server.world().tick));
+  if (!options.save.empty()) {
+    if (!scraps_apps::save_game(server, game.name(), options.save, error)) {
+      std::fprintf(stderr, "error: cannot save: %s\n", error.c_str());
+      return 1;
+    }
+    std::printf("saved tick %u to %s\n", static_cast<unsigned>(server.world().tick), options.save.c_str());
+  }
   return 0;
 }

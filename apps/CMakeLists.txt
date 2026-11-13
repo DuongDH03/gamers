@@ -69,3 +69,24 @@ add_test(NAME server_runs COMMAND scraps_server --bind 127.0.0.1 --port 47777 --
 add_test(NAME client_offline_hot_game COMMAND scraps_client --headless --frames 600 --scene side --hot-game)
 add_test(NAME server_hot_game COMMAND scraps_server --bind 127.0.0.1 --port 47778 --ticks 30 --hot-game)
 add_test(NAME bench_runs COMMAND scraps_bench --ticks 60)
+
+# Save and load, and pause (docs/specs/2026-11-14-offline-essentials-and-ui.md,
+# parts 1 and 4), each in a folder of its own. The dedicated server saves
+# when it stops and starts again from that save; the offline client's
+# autopilot quick-saves (F5), pauses for a second (P twice) and loads (F9).
+set(scraps_save_test_dir "${CMAKE_CURRENT_BINARY_DIR}/save_test")
+file(MAKE_DIRECTORY "${scraps_save_test_dir}")
+add_test(NAME server_save
+         COMMAND scraps_server --bind 127.0.0.1 --port 47779 --ticks 30 --scene top-down
+                 --save "${scraps_save_test_dir}/server.sav")
+set_tests_properties(server_save PROPERTIES FIXTURES_SETUP server_save_file
+                     PASS_REGULAR_EXPRESSION "saved tick 30 to" FAIL_REGULAR_EXPRESSION "error:")
+add_test(NAME server_load
+         COMMAND scraps_server --bind 127.0.0.1 --port 47780 --ticks 30 --load "${scraps_save_test_dir}/server.sav")
+set_tests_properties(server_load PROPERTIES FIXTURES_REQUIRED server_save_file
+                     PASS_REGULAR_EXPRESSION "scene 'top-down', tick 30.*world tick 60" FAIL_REGULAR_EXPRESSION "error:")
+add_test(NAME client_offline_save_pause_load COMMAND scraps_client --headless --frames 600 --scene top-down
+         WORKING_DIRECTORY "${scraps_save_test_dir}")
+set_tests_properties(client_offline_save_pause_load PROPERTIES
+                     PASS_REGULAR_EXPRESSION "saves 1, loads 1, save errors 0, paused frames 60, ticks while paused 0"
+                     FAIL_REGULAR_EXPRESSION "FAILED|error:|failed:")

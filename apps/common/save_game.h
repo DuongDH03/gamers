@@ -1,0 +1,117 @@
+#pragma once
+
+// Saving and loading the game to a file, shared by scraps_server (--save,
+// --load) and the offline scraps_client (F5, F9). Spec:
+// docs/specs/2026-11-14-offline-essentials-and-ui.md, part 1.
+//
+// Lives in apps/ because it wires three layers together: core (the save
+// format, scene files), views (movement rules for a perspective) and net
+// (the Server, which holds the true World: Rule 5). Which folder the file is
+// in is decided by each app, never by core.
+
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+#include "core/save.h"
+#include "core/scene.h"
+#include "net/server.h"
+#include "views/view_factory.h"
+
+namespace scraps_apps {
+
+// Paths are UTF-8 (SDL's preferences folder may hold any character).
+inline std::filesystem::path utf8_path(const std::string& path) { return std::filesystem::u8path(path); }
+
+// Writes `bytes` to `path`, creating its folder. Writes a temporary file
+// next to it first and then renames it over the old one, so a crash while
+// saving never leaves a half-written save behind.
+inline bool write_save_file(const std::string& path, const std::vector<std::uint8_t>& bytes, std::string& error) {
+  const std::filesystem::path target = utf8_path(path);
+  std::error_code fs_error;
+  if (target.has_parent_path()) std::filesystem::create_directories(target.parent_path(), fs_error);
+  std::filesystem::path temporary = target;
+  temporary += ".tmp";
+  {
+    std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+    if (!file) {
+      error = "cannot write " + temporary.u8string();
+      return false;
+    }
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    file.flush();
+    if (!file) {
+      error = "cannot write " + temporary.u8string();
+      return false;
+    }
+  }
+  std::filesystem::rename(temporary, target, fs_error);
+  if (fs_error) {
+    error = "cannot replace " + path + ": " + fs_error.message();
+    std::filesystem::remove(temporary, fs_error);
+    return false;
+  }
+  return true;
+}
+
+// Reads a whole save file. Files larger than any save are refused unread.
+inline bool read_save_file(const std::string& path, std::vector<std::uint8_t>& bytes, std::string& error) {
+  const std::filesystem::path source = utf8_path(path);
+  std::error_code fs_error;
+  const std::uintmax_t size = std::filesystem::file_size(source, fs_error);
+  if (fs_error) {
+    error = "no save at " + path;
+    return false;
+  }
+  if (size > scraps::kMaxSaveSize) {
+    error = path + " is too big to be a save";
+    return false;
+  }
+  std::ifstream file(source, std::ios::binary);
+  bytes.resize(static_cast<std::size_t>(size));
+  if (!file || !file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+    error = "cannot read " + path;
+    return false;
+  }
+  return true;
+}
+
+// Saves the server's World (read between ticks) to `path`.
+inline bool save_game(const scraps::Server& server, const std::string& game_name, const std::string& path,
+                      std::string& error) {
+  std::vector<std::uint8_t> bytes;
+  scraps::write_save(server.world(), server.scene_name(), server.scene_hash(), game_name, bytes);
+  return write_save_file(path, bytes, error);
+}
+
+// Loads `path` into the server, between ticks: builds the World from the
+// server's scene file as it is now, lays the save over it, and hands it to
+// Server::load_state. `header` describes the save. Returns kRefused with a
+// message (the running game is untouched), kLoaded, or kSceneChanged (loaded,
+// but the scene file is not the one the save was made with: warn).
+inline scraps::SaveLoad load_game(scraps::Server& server, const std::string& game_name,
+                                  const std::string& scene_directory, const std::string& path,
+                                  scraps::SaveHeader& header, std::string& error) {
+  std::vector<std::uint8_t> bytes;
+  if (!read_save_file(path, bytes, error)) return scraps::SaveLoad::kRefused;
+  scraps::Scene scene;
+  if (!scraps::load_scene(scene_directory, server.scene_name(), scene, error)) {
+    error = "cannot load the scene for this save: " + error;
+    return scraps::SaveLoad::kRefused;
+  }
+  scraps::World world = scraps::make_world(scene, scraps::movement_rules_for(scene.level.perspective));
+  scraps::SaveTarget target;
+  target.game_name = game_name;
+  target.scene_name = scene.name;
+  target.scene_hash = scene.content_hash;
+  const scraps::SaveLoad result = scraps::read_save(bytes.data(), bytes.size(), target, world, header, error);
+  if (result == scraps::SaveLoad::kRefused) return result;
+  server.load_state(std::move(world), scene.name, scene.content_hash);
+  return result;
+}
+
+}  // namespace scraps_apps

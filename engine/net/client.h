@@ -61,6 +61,13 @@ class Client {
   // Tells the server we are leaving.
   void disconnect();
 
+  // Pause (docs/specs/2026-11-14-offline-essentials-and-ui.md, part 4),
+  // offline only: the app pauses the embedded server too. While paused,
+  // tick() does nothing (no prediction, no inputs sent) and the server never
+  // times out, however long the pause. poll() still reads datagrams.
+  void set_paused(bool paused);
+  bool paused() const { return m_paused; }
+
   // Game code hot reload: prediction runs `simulate` from the next tick on
   // (nullptr: the engine's own). The predicted world and the input history
   // stay. Call it between ticks, never while one runs.
@@ -174,6 +181,11 @@ class Client {
   std::uint64_t m_delta_snapshots = 0;
   std::uint64_t m_missing_baselines = 0;
   bool m_snapshot_pending = false;  // m_authoritative holds a snapshot not yet reconciled
+  // The server replaced its world with one from an earlier tick (a loaded
+  // save): the next reconcile starts prediction over instead of blending.
+  bool m_world_replaced = false;
+  bool m_paused = false;
+  bool m_restart_timeout = false;  // set on resume: the paused time never counts as silence
   std::uint32_t m_snapshot_ack = 0;
   std::vector<std::uint8_t> m_receive_buffer;
   std::vector<std::uint8_t> m_send_buffer;

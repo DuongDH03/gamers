@@ -84,6 +84,15 @@ void Server::poll(double now) {
     handle_datagram(from, m_receive_buffer.data(), size, now);
   }
 
+  if (m_paused || m_restart_timeouts) {
+    // Timeouts are frozen while paused: a paused client sends nothing, and
+    // must not be dropped as gone.
+    for (ClientSlot& client : m_clients) {
+      if (client.connected) client.last_heard = now;
+    }
+    m_restart_timeouts = false;
+  }
+
   for (int i = 0; i < kMaxPlayers; ++i) {
     const ClientSlot& client = m_clients[static_cast<std::size_t>(i)];
     if (!client.connected) continue;
@@ -289,7 +298,13 @@ void Server::disconnect(int slot) {
   if (had_entity) m_pending_leave[index] = true;
 }
 
+void Server::set_paused(bool paused) {
+  if (m_paused && !paused) m_restart_timeouts = true;
+  m_paused = paused;
+}
+
 void Server::tick() {
+  if (m_paused) return;  // no tick, no snapshot (Rule 2: a pause stops ticks)
   m_tick_commands.clear();
 
   // Joins and leaves first; at most two per slot, so they always fit.
@@ -335,18 +350,29 @@ void Server::tick() {
 }
 
 void Server::reload(World world, std::string scene_name, std::uint32_t scene_hash) {
-  const Tick tick = m_world.tick;
+  world.tick = m_world.tick;  // ticks never go backwards on a hot reload
+  replace_world(std::move(world), std::move(scene_name), scene_hash);
+}
+
+void Server::load_state(World world, std::string scene_name, std::uint32_t scene_hash) {
+  // The saved tick stays. A client notices the tick going back in the next
+  // full snapshot and restarts its prediction and interpolation from it.
+  replace_world(std::move(world), std::move(scene_name), scene_hash);
+}
+
+void Server::replace_world(World world, std::string scene_name, std::uint32_t scene_hash) {
   m_world = std::move(world);
-  m_world.tick = tick;
   m_scene_name = std::move(scene_name);
   m_scene_hash = scene_hash;
   for (std::size_t i = 0; i < m_clients.size(); ++i) {
-    // The old world, with every entity in it, is gone: nothing to remove.
-    m_pending_leave[i] = false;
     const ClientSlot& client = m_clients[i];
-    if (!client.connected) continue;
-    if (client.confirmed) m_pending_join[i] = true;
-    send_welcome(static_cast<int>(i));
+    const bool playing = client.connected && client.confirmed;
+    // The old world, with every entity in it, is gone. The new one may hold
+    // players (a loaded save): those who are playing now keep theirs (a join
+    // of a player who has an entity changes nothing), the others' are removed.
+    m_pending_leave[i] = !playing && find_entity(m_world, player_entity(m_world, static_cast<PlayerId>(i))) != nullptr;
+    if (playing) m_pending_join[i] = true;
+    if (client.connected) send_welcome(static_cast<int>(i));
   }
   forget_snapshots();
 }

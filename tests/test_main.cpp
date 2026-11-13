@@ -7,6 +7,7 @@ void register_net_tests(test::Registry& registry);
 void register_sandbox_tests(test::Registry& registry);
 void register_udp_tests(test::Registry& registry);
 void register_game_tests(test::Registry& registry);
+void register_save_tests(test::Registry& registry);
 
 // Usage: scraps_tests [name-prefix]   e.g. "net." runs only the net tests.
 int main(int argc, char** argv) {
@@ -18,5 +19,6 @@ int main(int argc, char** argv) {
   register_sandbox_tests(registry);
   register_udp_tests(registry);
   register_game_tests(registry);
+  register_save_tests(registry);
   return registry.run(argc > 1 ? argv[1] : "") == 0 ? 0 : 1;
 }

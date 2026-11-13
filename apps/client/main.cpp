@@ -29,7 +29,9 @@
 #include "backends/sdl3/sdl3_backend.h"
 #endif
 #include "common/game_module.h"
+#include "common/pause.h"
 #include "common/random_secret.h"
+#include "common/save_game.h"
 #include "common/scene_reload.h"
 #include "core/fixed_step.h"
 #include "core/jobs.h"
@@ -77,8 +79,9 @@ void print_usage() {
       "  --hot-game            offline only: run the game from its module and reload it\n"
       "                        when rebuilt (cmake --build --preset mingw-game / msvc-game)\n"
       "keys: WASD/arrows move, Space jump, E drop coin, left click place coin, V next view,\n"
-      "      -/= or wheel zoom, Esc quit\n"
-      "gamepad: left stick/d-pad move, south (A on Xbox) jump, west (X on Xbox) drop coin\n"
+      "      -/= or wheel zoom, Esc quit; offline: P pause, F5 quick save, F9 quick load\n"
+      "gamepad: left stick/d-pad move, south (A on Xbox) jump, west (X on Xbox) drop coin,\n"
+      "         start pause (offline)\n"
       "offline, editing the .scene file reloads it while the game runs\n");
 }
 
@@ -234,6 +237,10 @@ void drive_autopilot(headless::HeadlessInput& input, long frame, float width, fl
   tap(Key::kSpace, frame % 45 == 20);
   tap(Key::kE, frame % 360 == 200);
   tap(Key::kV, frame == 300 || frame == 400);
+  // Offline: quick save, a one-second pause, then load the save again.
+  tap(Key::kF5, frame == 240);
+  tap(Key::kP, frame == 270 || frame == 330);
+  tap(Key::kF9, frame == 420);
   // A slow circle a little right of and below the screen centre (the player),
   // about a cell away at the default zoom.
   const float angle = static_cast<float>(frame) * 0.05f;
@@ -292,6 +299,22 @@ void draw_pointer_cell(const View& view, const Camera& camera, const TileGrid& g
   }
 }
 
+// Where quick saves go: the player's own folder from SDL (on Windows
+// %APPDATA%\Scraps\<game>\), or ./saves/ without a window. Decided here, in
+// the app, never in core (Rule 3).
+std::string save_directory(const Options& options, const char* game_name) {
+#if SCRAPS_HAS_SDL3
+  if (!options.headless) {
+    const std::string path = sdl3::preferences_path("Scraps", game_name);
+    if (!path.empty()) return path;
+  }
+#else
+  (void)options;
+  (void)game_name;
+#endif
+  return "saves/";
+}
+
 // The camera follows the local player in the world being drawn.
 Vec3 focus_point(const World& shown, EntityId me_id) {
   const Entity* me = find_entity(shown, me_id);
@@ -342,6 +365,15 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
     notice_until = 8.0;
   }
   FixedStepClock clock;
+  // Offline only: pause (P) and the quick save slot (F5 saves, F9 loads).
+  scraps_apps::OfflinePause pause;
+  const std::string quick_save_path =
+      session.server ? save_directory(options, session.game.name()) + "quick.sav" : std::string();
+  long saves = 0;
+  long loads = 0;
+  long save_errors = 0;
+  long paused_frames = 0;
+  long ticks_while_paused = 0;
   const auto start = std::chrono::steady_clock::now();
   double now = 0.0;
   double last = 0.0;
@@ -441,6 +473,52 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
       const std::string title = std::string("Scraps - ") + view->name();
       platform.window->set_title(title.c_str());
     }
+    // Pause, offline only. The one place that toggles it (a gamepad's start
+    // button or a pause menu can call the same).
+    auto toggle_pause = [&]() {
+      if (!pause.toggle(session.server.get(), client, clock)) {
+        notice = "pause works offline only";
+      } else {
+        // TODO(merge): duck music to 40% while paused (part 2's mixer), back to full on resume.
+        notice = pause.paused() ? "paused" : "resumed";
+      }
+      notice_until = now + 2.0;
+    };
+    if (input.was_pressed(Key::kP) || input.was_pressed(GamepadButton::kStart)) toggle_pause();
+    if (input.was_pressed(Key::kF5) || input.was_pressed(Key::kF9)) {
+      // Saving reads, and loading replaces, the embedded server's World
+      // between ticks (Rule 5: the server holds the true World).
+      std::string save_error;
+      if (!session.server) {
+        notice = "save and load work offline only";
+      } else if (input.was_pressed(Key::kF5)) {
+        if (scraps_apps::save_game(*session.server, session.game.name(), quick_save_path, save_error)) {
+          ++saves;
+          notice = "saved to " + quick_save_path;
+        } else {
+          ++save_errors;
+          notice = "save failed: " + save_error;
+        }
+      } else {
+        SaveHeader header;
+        const SaveLoad result = scraps_apps::load_game(*session.server, session.game.name(), options.scene_dir,
+                                                       quick_save_path, header, save_error);
+        if (result == SaveLoad::kRefused) {
+          ++save_errors;
+          notice = "load failed: " + save_error;
+        } else {
+          ++loads;
+          pause.set(false, session.server.get(), client, clock);  // a loaded game starts running
+          notice = "loaded " + quick_save_path + " (tick " + std::to_string(header.tick) + ")";
+          if (result == SaveLoad::kSceneChanged) {
+            notice += "; warning: the scene file changed since this save";
+          }
+        }
+      }
+      std::printf("%s\n", notice.c_str());
+      std::fflush(stdout);
+      notice_until = now + 4.0;
+    }
     if (input.was_pressed(Key::kMinus)) camera.zoom = std::max(6.0f, camera.zoom / 1.25f);
     if (input.was_pressed(Key::kEquals)) camera.zoom = std::min(200.0f, camera.zoom * 1.25f);
     const float wheel = input.wheel();
@@ -449,7 +527,11 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
       camera.zoom = std::max(6.0f, std::min(200.0f, camera.zoom * std::pow(1.25f, notches)));
     }
 
-    const int steps = clock.advance(frame_seconds);
+    const int steps = pause.advance(clock, frame_seconds);
+    if (pause.paused()) {
+      ++paused_frames;
+      ticks_while_paused += steps;
+    }
     for (int step = 0; step < steps; ++step) {
       CommandList commands;
       if (view && client.state() == ClientState::kConnected) {
@@ -537,9 +619,23 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
     renderer.draw_debug_text(10.0f, 24.0f, line, Color(200, 200, 210));
     renderer.draw_debug_text(10.0f, 38.0f,
                              "WASD/stick move  Space/south jump  E/west drop coin  Click place coin  V view  "
-                             "-/= wheel zoom  Esc quit",
+                             "-/= wheel zoom  P/start pause  F5 save  F9 load  Esc quit",
                              Color(150, 150, 165));
     if (now < notice_until) renderer.draw_debug_text(10.0f, 52.0f, notice.c_str(), Color(255, 220, 120));
+    if (pause.paused()) {
+      // Until the UI layer draws a pause menu (spec part 6).
+      const char* text = "Paused - P to resume";
+      const float text_width = static_cast<float>(std::strlen(text)) * 8.0f;
+      const float x = (static_cast<float>(renderer.output_width()) - text_width) * 0.5f;
+      const float y = static_cast<float>(renderer.output_height()) * 0.5f;
+      RectF strip;
+      strip.x = x - 12.0f;
+      strip.y = y - 10.0f;
+      strip.w = text_width + 24.0f;
+      strip.h = 28.0f;
+      renderer.fill_rect(strip, Color(0, 0, 0, 170));
+      renderer.draw_debug_text(x, y, text, Color(255, 255, 255));
+    }
     renderer.end_frame();
 
     // Keep the audio device about 60 ms ahead.
@@ -574,6 +670,10 @@ int run(const Options& options, PlatformServices platform, headless::HeadlessInp
     if (me == nullptr) {
       std::printf("FAILED: the local player never appeared\n");
       return 1;
+    }
+    if (session.server) {
+      std::printf("offline: saves %ld, loads %ld, save errors %ld, paused frames %ld, ticks while paused %ld\n",
+                  saves, loads, save_errors, paused_frames, ticks_while_paused);
     }
     char hud[64] = {};
     session.game.hud(world, client.player_id(), hud, sizeof(hud));

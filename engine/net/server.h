@@ -64,12 +64,30 @@ class Server {
   // new Welcome naming the new scene hash, which makes it reload too.
   void reload(World world, std::string scene_name, std::uint32_t scene_hash);
 
+  // Loading a save (docs/specs/2026-11-14-offline-essentials-and-ui.md,
+  // part 1): replaces the world with `world`, a save laid over the World
+  // built from the scene (core/save.h), between ticks. Like reload(), this
+  // is construction, not mutation (Rule 1), and every client gets a new
+  // Welcome and then a full snapshot. Unlike reload(), the tick is the
+  // saved one: the game resumes exactly where it was saved. Players who are
+  // playing now keep their saved entity (or join, if the save has none);
+  // saved players who are not here now are removed at the next tick.
+  void load_state(World world, std::string scene_name, std::uint32_t scene_hash);
+
+  // Pause (part 4), offline only: while paused, tick() does nothing (no
+  // ticks, no snapshots) and no client times out, however long the pause.
+  // Datagrams are still read, so a Bye or a Hello is not lost.
+  void set_paused(bool paused);
+  bool paused() const { return m_paused; }
+
   // Game code hot reload: the next tick runs `simulate` (nullptr: the
   // engine's own). The world and every connection stay as they are. Call it
   // between ticks, never while one runs.
   void set_simulate(SimulateFn simulate) { m_simulate = simulate != nullptr ? simulate : &scraps::simulate; }
 
-  const World& world() const { return m_world; }
+  const World& world() const { return m_world; }  // read-only: saving reads it between ticks
+  const std::string& scene_name() const { return m_scene_name; }
+  std::uint32_t scene_hash() const { return m_scene_hash; }
   int client_count() const;  // confirmed players
   std::uint64_t dropped_commands() const { return m_dropped_commands; }
   std::uint64_t unsent_snapshots() const { return m_unsent_snapshots; }
@@ -122,6 +140,8 @@ class Server {
   void send_challenge(const Address& to, double now);
   void handle_input(int slot, ByteReader& reader);
   void disconnect(int slot);
+  // reload() and load_state(): a new world, re-joins, Welcomes, no baselines.
+  void replace_world(World world, std::string scene_name, std::uint32_t scene_hash);
   void send_welcome(int slot);
   void send_snapshots();
   void send_snapshot(ClientSlot& client, const std::vector<std::uint8_t>& payload);
@@ -170,6 +190,10 @@ class Server {
   std::uint64_t m_hellos_rate_limited = 0;
   std::uint64_t m_client_datagrams_dropped = 0;
   std::uint64_t m_forged_datagrams = 0;
+  bool m_paused = false;
+  // Set on resume: the next poll() restarts every client's silence clock,
+  // so the time spent paused never counts towards a timeout.
+  bool m_restart_timeouts = false;
 };
 
 }  // namespace scraps
