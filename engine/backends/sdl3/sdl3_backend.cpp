@@ -4,6 +4,7 @@
 
 #include <climits>
 #include <cmath>
+#include <cstring>
 
 namespace scraps::sdl3 {
 namespace {
@@ -41,6 +42,10 @@ SDL_Scancode to_scancode(Key key) {
     case Key::kP: return SDL_SCANCODE_P;
     case Key::kF5: return SDL_SCANCODE_F5;
     case Key::kF9: return SDL_SCANCODE_F9;
+    case Key::kBackspace: return SDL_SCANCODE_BACKSPACE;
+    case Key::kDelete: return SDL_SCANCODE_DELETE;
+    case Key::kHome: return SDL_SCANCODE_HOME;
+    case Key::kEnd: return SDL_SCANCODE_END;
     default: return SDL_SCANCODE_UNKNOWN;
   }
 }
@@ -198,28 +203,49 @@ void Sdl3Platform::pump_events() {
   m_wheel = 0.0f;
   m_pad_pressed.fill(false);
   m_pad_released.fill(false);
+  m_events.clear();
   SDL_Event event;
   std::size_t button = 0;
+  InputEvent item;  // the event list's entry for the SDL event at hand
   while (SDL_PollEvent(&event)) {
+    item = InputEvent();
     switch (event.type) {
       case SDL_EVENT_QUIT:
       case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         m_close_requested = true;
         break;
       case SDL_EVENT_KEY_DOWN:
-        if (!event.key.repeat) {
-          const Key key = from_scancode(event.key.scancode);
-          if (key != Key::kUnknown) m_pressed[static_cast<std::size_t>(key)] = true;
-        }
+      case SDL_EVENT_KEY_UP: {
+        const Key key = from_scancode(event.key.scancode);
+        if (key == Key::kUnknown) break;
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) m_pressed[static_cast<std::size_t>(key)] = true;
+        item.type = event.type == SDL_EVENT_KEY_DOWN ? InputEventType::kKeyDown : InputEventType::kKeyUp;
+        item.key = key;
+        item.repeat = event.type == SDL_EVENT_KEY_DOWN && event.key.repeat;
+        m_events.push(item);
+        break;
+      }
+      case SDL_EVENT_TEXT_INPUT:
+        // Only arrives between SDL_StartTextInput and SDL_StopTextInput.
+        if (event.text.text != nullptr) m_events.push_text(event.text.text, std::strlen(event.text.text));
         break;
       case SDL_EVENT_MOUSE_MOTION:
         set_pointer(event.motion.x, event.motion.y);
+        item.type = InputEventType::kPointerMove;
+        item.x = m_pointer.x;
+        item.y = m_pointer.y;
+        m_events.push(item);
         break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         set_pointer(event.button.x, event.button.y);
         if (to_mouse_button(event.button.button, button)) {
           m_button_pressed[button] = true;
           m_button_down[button] = true;
+          item.type = InputEventType::kPointerDown;
+          item.button = static_cast<MouseButton>(button);
+          item.x = m_pointer.x;
+          item.y = m_pointer.y;
+          m_events.push(item);
         }
         break;
       case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -227,13 +253,23 @@ void Sdl3Platform::pump_events() {
         if (to_mouse_button(event.button.button, button)) {
           m_button_released[button] = true;
           m_button_down[button] = false;
+          item.type = InputEventType::kPointerUp;
+          item.button = static_cast<MouseButton>(button);
+          item.x = m_pointer.x;
+          item.y = m_pointer.y;
+          m_events.push(item);
         }
         break;
       case SDL_EVENT_MOUSE_WHEEL: {
         // "Natural" scrolling reports flipped values; undo it so positive
         // always means away from the user.
         const float notches = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
-        if (std::isfinite(notches)) m_wheel += notches;
+        if (std::isfinite(notches)) {
+          m_wheel += notches;
+          item.type = InputEventType::kWheel;
+          item.wheel = notches;
+          m_events.push(item);
+        }
         break;
       }
       case SDL_EVENT_WINDOW_MOUSE_ENTER:
@@ -267,9 +303,17 @@ void Sdl3Platform::pump_events() {
       case SDL_EVENT_GAMEPAD_BUTTON_UP:
         if (m_pad != nullptr && event.gbutton.which == m_pad_id && to_pad_button(event.gbutton.button, button)) {
           if (event.gbutton.down) {
-            if (!m_pad_down[button]) m_pad_pressed[button] = true;
+            if (!m_pad_down[button]) {
+              m_pad_pressed[button] = true;
+              item.type = InputEventType::kPadDown;
+              item.pad = static_cast<GamepadButton>(button);
+              m_events.push(item);
+            }
           } else if (m_pad_down[button]) {
             m_pad_released[button] = true;
+            item.type = InputEventType::kPadUp;
+            item.pad = static_cast<GamepadButton>(button);
+            m_events.push(item);
           }
           m_pad_down[button] = event.gbutton.down;
         }
@@ -334,6 +378,12 @@ void Sdl3Platform::clear_gamepad_state() {
 }
 
 void Sdl3Platform::set_title(const char* title) { SDL_SetWindowTitle(m_window, title); }
+
+void Sdl3Platform::start_text_input() { SDL_StartTextInput(m_window); }
+
+void Sdl3Platform::stop_text_input() { SDL_StopTextInput(m_window); }
+
+bool Sdl3Platform::text_input_active() const { return SDL_TextInputActive(m_window); }
 
 // ---------------------------------------------------------------- Input
 

@@ -47,9 +47,10 @@
 
 namespace scraps {
 
-// Bump when GameApi, GameBinding or SoundEvents change shape or meaning.
-// History: 1 = first version; 2 = GameBinding can name a gamepad button.
-constexpr std::uint32_t kGameApiVersion = 2;
+// Bump when GameApi, GameBinding, GameUiCommand or SoundEvents change shape
+// or meaning. History: 1 = first version; 2 = GameBinding can name a gamepad
+// button; 3 = GameApi lists the game's UI commands (ui_commands).
+constexpr std::uint32_t kGameApiVersion = 3;
 
 // One input binding of a game: a key, a mouse button or a gamepad button
 // sends `command`. Exactly one of the three is set; the others keep their
@@ -85,6 +86,21 @@ constexpr GameBinding pad_binding(GamepadButton pad, CommandType command) {
 
 // The most bindings an app takes from a game (Controls has 12 slots in all).
 constexpr std::size_t kMaxGameBindings = 12;
+
+// A game command a UI may send by name (spec 2026-11-14, part 6a): a UI
+// button "drop coin" sends {"type":"action","name":"command","command":
+// "drop_coin"}, and the app queues `command` for the local player at the
+// next tick (Rule 1: the UI never touches the World). `name` is 1 to 31
+// ASCII letters, digits, '_' or '-', unique within the game; it lives in the
+// game's code, so apps copy it. `command` is a game or engine command that a
+// client may send (not kNone, not server-only).
+struct GameUiCommand {
+  const char* name;
+  CommandType command;
+};
+
+constexpr std::size_t kMaxGameUiCommands = 8;
+constexpr std::size_t kGameUiCommandNameCapacity = 32;  // 31 characters and the '\0'
 
 // What the local player should hear for one tick, as sound names from the
 // scene ("jump", "coin"). The names are copied in, so nothing here points
@@ -122,6 +138,10 @@ struct GameApi {
   // Presentation only: a short status for the HUD ("coins 3"), written into
   // `out` (`size` bytes, always terminated). May be nullptr.
   void (*hud)(const World& world, PlayerId player, char* out, std::size_t size);
+  // Version 3: the game commands a UI may send by name (GameUiCommand), at
+  // most kMaxGameUiCommands. May be nullptr with a count of 0.
+  const GameUiCommand* ui_commands;
+  std::size_t ui_command_count;
 };
 
 // The C entry point every game module exports, and its type.
@@ -272,7 +292,11 @@ constexpr std::uint64_t compute() {
   h = mix(h, sizeof(GameBinding));
   h = mix(h, offsetof(GameBinding, pad));
   h = mix(h, sizeof(SoundEvents));
+  h = mix(h, sizeof(GameUiCommand));
+  h = mix(h, offsetof(GameUiCommand, command));
   h = mix(h, sizeof(GameApi));
+  h = mix(h, offsetof(GameApi, ui_commands));
+  h = mix(h, offsetof(GameApi, ui_command_count));
   return h;
 }
 

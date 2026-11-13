@@ -32,6 +32,12 @@ void Controls::clear_bindings() {
   m_binding_count = 0;
 }
 
+void Controls::clear_latches() {
+  m_jump_latched = false;
+  m_up_latched = false;
+  for (std::size_t i = 0; i < m_binding_count; ++i) m_bindings[i].latched = false;
+}
+
 Vec2 Controls::apply_dead_zone(Vec2 stick) {
   if (!is_finite(stick)) return Vec2();
   const float len = length(stick);

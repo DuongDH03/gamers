@@ -27,6 +27,13 @@ constexpr scraps::GameBinding kBindings[] = {
     scraps::pad_binding(scraps::GamepadButton::kWest, sandbox::kDropCoin),
 };
 
+// One more UI command than the sandbox, so a swap visibly brings its own
+// (game.swap_runs_the_new_code).
+constexpr scraps::GameUiCommand kUiCommands[] = {
+    {"drop_coin", sandbox::kDropCoin},
+    {"jump", scraps::CommandType::kJump},
+};
+
 constexpr scraps::GameApi kApi = {
     scraps::kGameApiVersion,
     scraps::kGameLayoutHash,
@@ -36,6 +43,8 @@ constexpr scraps::GameApi kApi = {
     sizeof(kBindings) / sizeof(kBindings[0]),
     &sandbox::sound_events,
     &sandbox::hud,
+    kUiCommands,
+    sizeof(kUiCommands) / sizeof(kUiCommands[0]),
 };
 
 }  // namespace

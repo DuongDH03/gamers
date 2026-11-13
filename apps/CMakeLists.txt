@@ -11,19 +11,34 @@ function(scraps_add_server target game)
   scraps_target_defaults(${target})
 endfunction()
 
+#
+# The client is the executable (main.cpp: options and the loop) plus
+# <target>_lib (client_app.cpp: ClientApp, one frame of the client), which
+# tests and other hosts (a WebView app) link too.
 function(scraps_add_client target game)
-  add_executable(${target} ${PROJECT_SOURCE_DIR}/apps/client/main.cpp)
-  target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/apps)
-  target_link_libraries(${target} PRIVATE scraps_net scraps_views scraps_udp scraps_headless scraps_dynlib
-                                          scraps_${game}_app)
+  add_library(${target}_lib STATIC ${PROJECT_SOURCE_DIR}/apps/client/client_app.cpp)
+  target_include_directories(${target}_lib PUBLIC ${PROJECT_SOURCE_DIR}/apps)
+  target_link_libraries(${target}_lib PUBLIC scraps_net scraps_views scraps_udp scraps_headless scraps_dynlib
+                                             scraps_ui_model scraps_${game}_app)
   if(TARGET scraps_sdl3)
-    target_link_libraries(${target} PRIVATE scraps_sdl3)
-    target_compile_definitions(${target} PRIVATE SCRAPS_HAS_SDL3=1)
+    target_link_libraries(${target}_lib PUBLIC scraps_sdl3)
+    target_compile_definitions(${target}_lib PUBLIC SCRAPS_HAS_SDL3=1)
   else()
-    target_compile_definitions(${target} PRIVATE SCRAPS_HAS_SDL3=0)
+    target_compile_definitions(${target}_lib PUBLIC SCRAPS_HAS_SDL3=0)
   endif()
+  scraps_target_defaults(${target}_lib)
+
+  add_executable(${target} ${PROJECT_SOURCE_DIR}/apps/client/main.cpp)
+  target_link_libraries(${target} PRIVATE ${target}_lib)
   scraps_target_defaults(${target})
 endfunction()
+
+# The app side of the UI bridge (docs/specs/2026-11-14-offline-essentials-
+# and-ui.md, part 6a): the tiny JSON writer and reader, and the UI model.
+add_library(scraps_ui_model STATIC common/ui_json.cpp common/ui_model.cpp)
+target_include_directories(scraps_ui_model PUBLIC ${PROJECT_SOURCE_DIR}/apps)
+target_link_libraries(scraps_ui_model PUBLIC scraps_net scraps_views scraps_dynlib)
+scraps_target_defaults(scraps_ui_model)
 
 scraps_add_server(scraps_server ${SCRAPS_GAME})
 scraps_add_client(scraps_client ${SCRAPS_GAME})

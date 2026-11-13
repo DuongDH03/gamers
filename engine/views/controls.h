@@ -50,6 +50,10 @@ class Controls {
   // stay), including presses latched for them. Used when a game's code is
   // swapped.
   void clear_bindings();
+  // Forgets presses and clicks latched but not yet emitted (bindings stay).
+  // Called when the game resumes or starts: a press made while no ticks ran
+  // (paused, or in a menu) must not act afterwards.
+  void clear_latches();
 
   // Call once per rendered frame, after Window::pump_events(). Clicks are
   // turned into world points with `view` and `camera` on the view's pointer

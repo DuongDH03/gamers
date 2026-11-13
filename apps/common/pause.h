@@ -20,6 +20,10 @@
 
 namespace scraps_apps {
 
+// While paused the music plays at this share of the player's music volume
+// (spec part 4); the two are multiplied, so neither overwrites the other.
+constexpr float kPauseMusicDuck = 0.4f;
+
 class OfflinePause {
  public:
   // Returns false, and changes nothing, online (`server` is nullptr).

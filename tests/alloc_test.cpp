@@ -21,6 +21,7 @@
 #include "backends/headless/headless_backend.h"
 #include "common/game_module.h"
 #include "common/pause.h"
+#include "common/ui_model.h"
 #include "core/fixed_step.h"
 #include "core/jobs.h"
 #include "core/mixer.h"
@@ -168,6 +169,23 @@ int main() {
   char hud[64] = {};
   long hud_length = 0;  // used, so the HUD is not optimised away
 
+  // The UI bridge (spec 2026-11-14, part 6a): a headless UI host polled and
+  // a view published every frame. Nothing changes, so nothing is posted; the
+  // "page" also sends a malformed message and a game command now and then
+  // (ignored on the main menu), which are parsed and handled in place.
+  // Volumes are applied every frame, as the client does.
+  headless::HeadlessUi ui_host;
+  ui_host.set_present(true);
+  scraps_apps::OfflinePause ui_pause;
+  scraps_apps::UiModel ui_model(ui_pause, false, true);
+  scraps_apps::UiRequests ui_requests;
+  scraps_apps::UiAppState ui_state;
+  ui_state.game = "sandbox";
+  ui_state.hud = "coins 0";
+  ui_model.publish(ui_host, ui_state, game);  // the first view (allocates in the test host)
+  Mixer ui_mixer;
+  long ui_requests_seen = 0;
+
   auto run = [&](int ticks) {
     for (int t = 0; t < ticks; ++t) {
       commands.clear();
@@ -217,6 +235,15 @@ int main() {
       }
       now += 1.0 / 60.0;
       if (game.poll(now, game_targets, game_message) != scraps_apps::GameReload::kNone) ++bad_deltas;
+      if (t % 10 == 3) {
+        ui_host.inject("{\"type\":\"action\",\"name\":\"command\",\"command\":\"drop_coin\"}");
+        ui_host.inject("{\"type\":\"action\",\"name\":\"play\",,}");
+      }
+      ui_requests.count = 0;
+      ui_model.receive(ui_host, game, ui_requests);
+      ui_requests_seen += static_cast<long>(ui_requests.count);
+      if (ui_model.publish(ui_host, ui_state, game)) ++bad_deltas;  // nothing changed: nothing posted
+      ui_model.apply_volumes(ui_mixer);
       game.hud(world, 0, hud, sizeof(hud));
       hud_length += static_cast<long>(std::strlen(hud));
       SoundEvents events;
@@ -238,9 +265,15 @@ int main() {
   std::printf(
       "%ld allocations in 300 ticks of threaded simulate + world copy + delta encode/decode + mixing with streamed "
       "music + mouse and gamepad sampling and picking + hot game module polling, HUD and sounds + 3 textured view "
-      "draws with shadows (%lu entities, "
-      "pick sum %.1f, HUD %ld)\n",
-      allocations, static_cast<unsigned long>(count_alive(world)), static_cast<double>(pick_sum), hud_length);
+      "draws with shadows, UI bridge polling, parsing and publishing (%lu entities, "
+      "pick sum %.1f, HUD %ld, UI messages %lu, posts %lu)\n",
+      allocations, static_cast<unsigned long>(count_alive(world)), static_cast<double>(pick_sum), hud_length,
+      static_cast<unsigned long>(ui_model.malformed() + ui_model.ignored()),
+      static_cast<unsigned long>(ui_host.posts().size()));
+  if (ui_requests_seen != 0 || ui_host.posts().size() != 1 || ui_model.malformed() == 0 || ui_model.ignored() == 0) {
+    std::printf("FAILED: the UI bridge did not see what it was sent\n");
+    return 1;
+  }
   if (bad_deltas != 0) {
     std::printf("FAILED: %ld deltas did not decode\n", bad_deltas);
     return 1;
