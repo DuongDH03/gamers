@@ -9,6 +9,7 @@
 #include "platform/input.h"
 #include "platform/renderer2d.h"
 #include "platform/services.h"
+#include "platform/ui.h"
 #include "platform/window.h"
 
 // The headless backend: no window, no drawing, no sound. It runs the full
@@ -18,9 +19,11 @@
 namespace scraps::headless {
 
 // Keyboard, mouse and gamepad state driven by code. press()/release(),
-// move_pointer(), scroll(), set_axis() and connect_gamepad() take effect at
-// the next Window::pump_events(), exactly like real events: a press, a
-// release or a scroll is seen for one frame.
+// move_pointer(), scroll(), set_axis(), connect_gamepad() and type_text()
+// take effect at the next Window::pump_events(), exactly like real events: a
+// press, a release or a scroll is seen for one frame. Each call that changes
+// something also adds its event to the next frame's events(), in call order.
+// Pressing a key that is already down adds nothing (no key repeat here).
 class HeadlessInput final : public Input {
  public:
   bool is_down(Key key) const override;
@@ -38,6 +41,16 @@ class HeadlessInput final : public Input {
   bool was_pressed(GamepadButton button) const override;
   bool was_released(GamepadButton button) const override;
   float axis(GamepadAxis axis) const override;
+
+  const InputEventList& events() const override { return m_events; }
+  // Takes effect at once, as SDL_StartTextInput does.
+  void start_text_input() override { m_text_input = true; }
+  void stop_text_input() override { m_text_input = false; }
+  bool text_input_active() const override { return m_text_input; }
+
+  // Typed text for the next frame, as kText events. Ignored (returns false)
+  // while text input is off, as a real keyboard's text would be.
+  bool type_text(const char* utf8);
 
   void press(Key key);
   void release(Key key);
@@ -93,6 +106,39 @@ class HeadlessInput final : public Input {
   std::array<bool, kPadButtons> m_pad_released{};
   std::array<float, kPadAxes> m_pending_axes{};
   std::array<float, kPadAxes> m_axes{};
+
+  // Events collected since the last frame, and this frame's.
+  InputEventList m_pending_events;
+  InputEventList m_events;
+  bool m_text_input = false;
+};
+
+// A UI host for tests: there is no page. It records what the app posts and
+// hands the app messages a test injects, as if a page had sent them. Shows
+// no UI (present() is false) until set_present(true).
+class HeadlessUi final : public UiHost {
+ public:
+  bool present() const override { return m_present; }
+  // Records a copy (this allocates: tests only). False when not present.
+  bool post(const char* json, std::size_t size) override;
+  void receive(UiMessageList& out) override;
+
+  void set_present(bool present) { m_present = present; }
+  // A message from the "page", handed over at the app's next receive().
+  // False (and counted as dropped) when it does not fit, as in a real host.
+  bool inject(const char* json, std::size_t size);
+  bool inject(const char* json);
+
+  const std::vector<std::string>& posts() const { return m_posts; }
+  // The last message posted, or "" if none.
+  const std::string& last_post() const;
+  void clear_posts() { m_posts.clear(); }
+
+ private:
+  bool m_present = false;
+  UiMessageList m_inbox;
+  std::vector<std::string> m_posts;
+  std::string m_none;
 };
 
 class HeadlessWindow final : public Window {
@@ -195,12 +241,15 @@ class HeadlessBackend {
   HeadlessWindow& window() { return m_window; }
   HeadlessRenderer& renderer() { return m_renderer; }
   HeadlessAudio& audio() { return m_audio; }
+  // Always in services(); it shows a UI only after ui().set_present(true).
+  HeadlessUi& ui() { return m_ui; }
 
  private:
   HeadlessInput m_input;
   HeadlessWindow m_window;  // declared after m_input, which it refers to
   HeadlessRenderer m_renderer;
   HeadlessAudio m_audio;
+  HeadlessUi m_ui;
 };
 
 }  // namespace scraps::headless

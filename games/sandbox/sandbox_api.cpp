@@ -18,8 +18,14 @@ constexpr scraps::GameBinding kBindings[] = {
     scraps::pad_binding(scraps::GamepadButton::kWest, kDropCoin),
 };
 
+// What a UI may ask for by name: a "drop coin" button on the HUD.
+constexpr scraps::GameUiCommand kUiCommands[] = {
+    {"drop_coin", kDropCoin},
+};
+
 // The function pointers below point into whichever build this is; in the
-// module they die with it, which is why the apps copy name and bindings.
+// module they die with it, which is why the apps copy the name, the bindings
+// and the UI command names.
 constexpr scraps::GameApi kApi = {
     scraps::kGameApiVersion,
     scraps::kGameLayoutHash,
@@ -29,6 +35,8 @@ constexpr scraps::GameApi kApi = {
     sizeof(kBindings) / sizeof(kBindings[0]),
     &sandbox::sound_events,
     &sandbox::hud,
+    kUiCommands,
+    sizeof(kUiCommands) / sizeof(kUiCommands[0]),
 };
 
 }  // namespace

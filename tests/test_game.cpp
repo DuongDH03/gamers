@@ -436,6 +436,7 @@ void swap_runs_the_new_code(test::Context& ctx) {
   // The sandbox module never writes the marker slot.
   CHECK(marker_of(swapped.server->world(), server_player) == 0);
   CHECK(marker_of(swapped.client->current_world(), swapped.client->local_entity()) == 0);
+  CHECK(module.ui_command_count() == 1);  // the sandbox's: drop_coin
 
   // The marker module is "built" over the watched file and swapped in.
   std::string message;
@@ -443,6 +444,13 @@ void swap_runs_the_new_code(test::Context& ctx) {
         GameReload::kReloaded);
   CHECK(message == std::string("game code reloaded (") + marker_game::kName + ")");
   CHECK(std::string(module.name()) == marker_game::kName);
+  // It brought its own UI commands, copied out of the module.
+  CHECK(module.ui_command_count() == 2);
+  CHECK(std::string(module.ui_command(0).name) == "drop_coin");
+  CHECK(std::string(module.ui_command(1).name) == "jump");
+  CommandType ui_jump = CommandType::kNone;
+  CHECK(module.find_ui_command("jump", 4, ui_jump) && ui_jump == CommandType::kJump);
+  CHECK(module.api().ui_commands[1].name == module.ui_command(1).name);  // the copy, not the module's string
   const Tick swap_tick = swapped.server->world().tick;
 
   for (int i = 60; i < 120; ++i) {
@@ -562,8 +570,8 @@ void mismatch_is_refused(test::Context& ctx) {
     now += 1.0;
     CHECK(message.find("game module not reloaded: built against another engine") == 0);
     if (std::string(bad_file) == SCRAPS_BAD_OLD_MODULE_FILE) {
-      // A module from before gamepad bindings says which version it has.
-      CHECK(message.find("(game API version 1, this program has 2)") != std::string::npos);
+      // A module from before UI commands says which version it has.
+      CHECK(message.find("(game API version 2, this program has 3)") != std::string::npos);
     }
     // The old code is still the one running, still loaded from the same copy.
     CHECK(module.api().simulate == good_simulate);

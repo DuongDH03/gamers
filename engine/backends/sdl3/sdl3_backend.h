@@ -63,6 +63,12 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   bool was_pressed(GamepadButton button) const override;
   bool was_released(GamepadButton button) const override;
   float axis(GamepadAxis axis) const override;
+  const InputEventList& events() const override { return m_events; }
+  // SDL_StartTextInput / SDL_StopTextInput on this window; typed text comes
+  // as SDL_EVENT_TEXT_INPUT and becomes kText events.
+  void start_text_input() override;
+  void stop_text_input() override;
+  bool text_input_active() const override;
 
   // Renderer2D
   TextureId create_texture(int width, int height, const std::uint8_t* rgba) override;
@@ -112,6 +118,7 @@ class Sdl3Platform final : public Window, public Input, public Renderer2D, publi
   std::array<bool, kPadButtons> m_pad_pressed{};
   std::array<bool, kPadButtons> m_pad_released{};
   std::array<float, kPadAxes> m_axes{};
+  InputEventList m_events;  // this frame's, refilled by pump_events()
   std::vector<SDL_Vertex> m_vertices;  // reused conversion buffer
   std::vector<SDL_Texture*> m_textures;  // index = TextureId - 1; nullptr once destroyed
 };

@@ -9,16 +9,19 @@ add_executable(scraps_tests
   test_game.cpp
   test_save.cpp
   test_apps.cpp
-  test_music.cpp)
+  test_music.cpp
+  test_ui.cpp)
 # test_game.cpp tests the apps' hot reload (apps/common/game_module.h).
 target_include_directories(scraps_tests PRIVATE ${PROJECT_SOURCE_DIR}/apps)
-target_link_libraries(scraps_tests PRIVATE scraps_net scraps_views scraps_headless scraps_udp scraps_dynlib scraps_sandbox)
+# test_ui.cpp drives the client app itself (ClientApp, built for SCRAPS_GAME) with a headless UI.
+target_link_libraries(scraps_tests PRIVATE scraps_net scraps_views scraps_headless scraps_udp scraps_dynlib scraps_sandbox
+                                           scraps_ui_model scraps_client_lib)
 scraps_target_defaults(scraps_tests)
 target_compile_definitions(scraps_tests PRIVATE SCRAPS_TEST_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/audio")
 
 # Three modules that must be refused (game.mismatch_is_refused): one from
-# a newer game API version, one from version 1 (before gamepad bindings),
-# one with "another" layout.
+# a newer game API version, one from the version before (without UI
+# commands), one with "another" layout.
 foreach(kind version old layout)
   string(TOUPPER ${kind} KIND)
   add_library(scraps_test_bad_${kind}_module SHARED bad_game_module.cpp)
@@ -51,13 +54,14 @@ target_compile_definitions(scraps_tests PRIVATE
   "SCRAPS_SANDBOX_MODULE_FILE=\"$<TARGET_FILE:scraps_sandbox_module>\""
   "SCRAPS_TEST_WORK_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/game_work\"")
 
-foreach(group core scene views platform controls net sandbox udp game save pause apps)
+foreach(group core scene views platform controls net sandbox udp game save pause apps ui)
   add_test(NAME unit_${group} COMMAND scraps_tests ${group}.)
 endforeach()
 
 add_executable(scraps_alloc_test alloc_test.cpp)
 target_include_directories(scraps_alloc_test PRIVATE ${PROJECT_SOURCE_DIR}/apps)
-target_link_libraries(scraps_alloc_test PRIVATE scraps_net scraps_views scraps_headless scraps_dynlib scraps_sandbox)
+target_link_libraries(scraps_alloc_test PRIVATE scraps_net scraps_views scraps_headless scraps_dynlib scraps_sandbox
+                                                scraps_ui_model)
 scraps_target_defaults(scraps_alloc_test)
 # It also streams music from the audio test files.
 target_compile_definitions(scraps_alloc_test PRIVATE SCRAPS_TEST_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/audio")

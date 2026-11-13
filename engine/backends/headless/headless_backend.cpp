@@ -1,6 +1,7 @@
 #include "backends/headless/headless_backend.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace scraps::headless {
 
@@ -17,14 +18,31 @@ bool HeadlessInput::was_pressed(Key key) const {
 void HeadlessInput::press(Key key) {
   const std::size_t i = slot(key);
   if (i >= m_down.size()) return;
-  if (!m_down[i]) m_pending_pressed[i] = true;
+  if (!m_down[i]) {
+    m_pending_pressed[i] = true;
+    InputEvent event;
+    event.type = InputEventType::kKeyDown;
+    event.key = key;
+    m_pending_events.push(event);
+  }
   m_down[i] = true;
 }
 
 void HeadlessInput::release(Key key) {
   const std::size_t i = slot(key);
   if (i >= m_down.size()) return;
+  if (m_down[i]) {
+    InputEvent event;
+    event.type = InputEventType::kKeyUp;
+    event.key = key;
+    m_pending_events.push(event);
+  }
   m_down[i] = false;
+}
+
+bool HeadlessInput::type_text(const char* utf8) {
+  if (!m_text_input || utf8 == nullptr) return false;
+  return m_pending_events.push_text(utf8, std::strlen(utf8));
 }
 
 bool HeadlessInput::is_down(MouseButton button) const {
@@ -46,23 +64,50 @@ void HeadlessInput::move_pointer(float x, float y) {
   m_pending_pointer.x = x;
   m_pending_pointer.y = y;
   m_pending_inside = true;
+  InputEvent event;
+  event.type = InputEventType::kPointerMove;
+  event.x = x;
+  event.y = y;
+  m_pending_events.push(event);
 }
 
 void HeadlessInput::press(MouseButton button) {
   const std::size_t i = slot(button);
   if (i >= m_button_down.size()) return;
-  if (!m_button_down[i]) m_pending_button_pressed[i] = true;
+  if (!m_button_down[i]) {
+    m_pending_button_pressed[i] = true;
+    InputEvent event;
+    event.type = InputEventType::kPointerDown;
+    event.button = button;
+    event.x = m_pending_pointer.x;
+    event.y = m_pending_pointer.y;
+    m_pending_events.push(event);
+  }
   m_button_down[i] = true;
 }
 
 void HeadlessInput::release(MouseButton button) {
   const std::size_t i = slot(button);
   if (i >= m_button_down.size()) return;
-  if (m_button_down[i]) m_pending_button_released[i] = true;
+  if (m_button_down[i]) {
+    m_pending_button_released[i] = true;
+    InputEvent event;
+    event.type = InputEventType::kPointerUp;
+    event.button = button;
+    event.x = m_pending_pointer.x;
+    event.y = m_pending_pointer.y;
+    m_pending_events.push(event);
+  }
   m_button_down[i] = false;
 }
 
-void HeadlessInput::scroll(float notches) { m_pending_wheel += notches; }
+void HeadlessInput::scroll(float notches) {
+  m_pending_wheel += notches;
+  InputEvent event;
+  event.type = InputEventType::kWheel;
+  event.wheel = notches;
+  m_pending_events.push(event);
+}
 
 bool HeadlessInput::is_down(GamepadButton button) const {
   const std::size_t i = slot(button);
@@ -99,14 +144,26 @@ void HeadlessInput::connect_gamepad(bool connected) {
 void HeadlessInput::press(GamepadButton button) {
   const std::size_t i = slot(button);
   if (!m_pending_pad_connected || i >= m_pending_pad_down.size()) return;
-  if (!m_pending_pad_down[i]) m_pending_pad_pressed[i] = true;
+  if (!m_pending_pad_down[i]) {
+    m_pending_pad_pressed[i] = true;
+    InputEvent event;
+    event.type = InputEventType::kPadDown;
+    event.pad = button;
+    m_pending_events.push(event);
+  }
   m_pending_pad_down[i] = true;
 }
 
 void HeadlessInput::release(GamepadButton button) {
   const std::size_t i = slot(button);
   if (!m_pending_pad_connected || i >= m_pending_pad_down.size()) return;
-  if (m_pending_pad_down[i]) m_pending_pad_released[i] = true;
+  if (m_pending_pad_down[i]) {
+    m_pending_pad_released[i] = true;
+    InputEvent event;
+    event.type = InputEventType::kPadUp;
+    event.pad = button;
+    m_pending_events.push(event);
+  }
   m_pending_pad_down[i] = false;
 }
 
@@ -141,6 +198,10 @@ void HeadlessInput::begin_frame() {
   m_pending_pad_pressed.fill(false);
   m_pending_pad_released.fill(false);
   m_axes = m_pending_axes;
+  // The events of what happened since the last frame, in order.
+  m_events.clear();
+  m_events.append(m_pending_events);
+  m_pending_events.clear();
 }
 
 void HeadlessWindow::pump_events() {
@@ -216,6 +277,24 @@ void HeadlessAudio::submit(const float* stereo, std::size_t frames) {
   }
 }
 
+bool HeadlessUi::post(const char* json, std::size_t size) {
+  if (!m_present || (json == nullptr && size > 0)) return false;
+  m_posts.emplace_back(json != nullptr ? json : "", size);
+  return true;
+}
+
+void HeadlessUi::receive(UiMessageList& out) {
+  out.clear();
+  out.append(m_inbox);
+  m_inbox.clear();
+}
+
+bool HeadlessUi::inject(const char* json, std::size_t size) { return m_inbox.push(json, size); }
+
+bool HeadlessUi::inject(const char* json) { return json != nullptr && inject(json, std::strlen(json)); }
+
+const std::string& HeadlessUi::last_post() const { return m_posts.empty() ? m_none : m_posts.back(); }
+
 HeadlessBackend::HeadlessBackend(int width, int height) : m_window(m_input), m_renderer(width, height) {}
 
 PlatformServices HeadlessBackend::services() {
@@ -224,6 +303,7 @@ PlatformServices HeadlessBackend::services() {
   services.input = &m_input;
   services.renderer = &m_renderer;
   services.audio = &m_audio;
+  services.ui = &m_ui;
   return services;
 }
 

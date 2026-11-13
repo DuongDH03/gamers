@@ -837,3 +837,231 @@ over bright and dark worlds.
 
 **Not verified here:** the page inside a real WebView2 window with the
 backend (agent 6); a real gamepad in the menus; a screen reader.
+---
+
+## Results, part 6 (agent 5, prerequisites)
+
+Built 2026-11-14 on branch `worktree-agent-a1edc0c837197969c` (from
+`cbd2527`). `mingw` and `msvc` both build with zero warnings, and `ctest`
+passes 32 of 32 on both (149 unit test functions, 16 of them new; the new
+CTest test is `unit_ui`).
+
+**What exists now**
+
+- **`Input` event list and text input** (`platform/input.h`).
+  `Input::events()` returns this frame's `InputEventList`: `InputEvent`s in
+  the order they happened (key down/up with `repeat`, UTF-8 text, pointer
+  move/down/up with the position, wheel, gamepad button down/up). It holds
+  256 events in fixed storage; more are dropped and counted (`dropped()`).
+  Pointer moves in a row are merged into the last one. Text arrives only
+  between `start_text_input()` and `stop_text_input()`, split into pieces of
+  at most 31 bytes between code points; bytes that are not UTF-8 are skipped.
+  `Key` gained `kBackspace`, `kDelete`, `kHome`, `kEnd` (for text fields). The
+  polled API is unchanged. sdl3 fills the list from its events
+  (`SDL_EVENT_TEXT_INPUT`, `SDL_StartTextInput(window)`); headless records an
+  event for every call that changes something, plus `type_text()`.
+- **`platform/ui.h`**: `UiMessageList` and `UiHost` (below), and
+  `PlatformServices::ui`. Headless has `HeadlessUi` (`HeadlessBackend::ui()`):
+  it records posts and lets a test `inject()` messages; it shows no UI until
+  `set_present(true)`.
+- **`apps/common/ui_json.h`**: `JsonWriter` (into a caller's buffer) and
+  `JsonObject` (one flat object: string, number, true, false, null; at most 16
+  fields, keys up to 31 bytes, strings up to 255). Anything else is
+  malformed: nesting, comments, trailing commas, duplicate keys, invalid
+  UTF-8, lone surrogates, `\u0000`, numbers that overflow, text after the
+  object. No allocation.
+- **`apps/common/ui_model.h`**: `UiModel`: parses actions, keeps the UI's own
+  state (main menu or started, settings open, volumes, the online pause menu),
+  queues game commands, builds the view message and posts it only when its
+  text changed. App actions come back as `UiRequest`s, which `ClientApp`
+  carries out with the same code as its keys. `NoInput` is an `Input` that
+  reports nothing.
+- **`apps/client/client_app.h`**: `ClientApp` (below). `main.cpp` is now
+  option parsing plus a ten-line loop for sdl3 and headless. The CMake helper
+  `scraps_add_client(<target> <game>)` builds `<target>_lib` (ClientApp) and
+  the exe; tests link `scraps_client_lib`, and `scraps_ui_model` holds the
+  JSON and the UI model.
+- **`GameApi` version 3**: `GameUiCommand {const char* name; CommandType
+  command;}`, and `GameApi::ui_commands` / `ui_command_count` at the end of the
+  struct (at most `kMaxGameUiCommands` = 8). `check_game_api` refuses: more
+  than 8, a null list with a count, a name that is not 1 to 31 ASCII letters,
+  digits, `_` or `-`, the same name twice, and `kNone` or server-only
+  commands ("UI command N of the game is not valid"). `GameModule` copies the
+  names like the bindings (`ui_command_count()`, `ui_command(i)`,
+  `find_ui_command(name, size, out)`), so a swap brings the new module's. The
+  layout hash mixes `sizeof(GameUiCommand)` and the new offsets. The sandbox
+  exports `drop_coin` → `kDropCoin`; the marker module exports `drop_coin` and
+  `jump`; the bad "old" module now claims version 2; the tiny game has none.
+
+**The interfaces agent 6 implements and uses**
+
+`engine/platform/ui.h`, the UI backend's side:
+
+```cpp
+namespace scraps {
+class UiMessageList {   // fixed storage: 32 messages, 2048 bytes each, 16384 in all
+ public:
+  static constexpr std::size_t kMaxMessages = 32, kMaxMessageBytes = 2048, kMaxBytes = 16384;
+  void clear();
+  bool push(const char* data, std::size_t size);  // false (counted in dropped()) if it does not fit
+  void append(const UiMessageList& other);
+  std::size_t count() const;
+  const char* data(std::size_t i) const;           // followed by a '\0'
+  std::size_t size(std::size_t i) const;
+  std::size_t dropped() const;
+};
+
+class UiHost {
+ public:
+  virtual ~UiHost() = default;
+  virtual bool present() const = 0;                              // fixed for the host's life
+  virtual bool post(const char* json, std::size_t size) = 0;     // native → UI; the host copies it
+  virtual void receive(UiMessageList& out) = 0;                  // UI → native since the last call; clears `out` first
+};
+
+struct PlatformServices {  // platform/services.h
+  Window* window; Input* input; Renderer2D* renderer; Audio* audio;
+  UiHost* ui = nullptr;    // new: a UI, or nullptr
+};
+}
+```
+
+Rules for a `UiHost`:
+- `post` is called only when the view changed, so **the host keeps the last
+  message and sends it again whenever the page (re)loads** (first load, F5 in
+  DevTools, Vite hot reload). It may be called before the page is ready.
+- Messages the page sends (`window.chrome.webview.postMessage`) are pushed
+  into a `UiMessageList` inbox as UTF-8 and handed over by `receive`, which
+  must not allocate when nothing arrived. Too long or too many: drop and
+  count; never cut a message.
+- Everything happens on the thread that calls `Window::pump_events()`.
+
+`engine/platform/input.h`, which the backend fills from WebView2's input:
+`Input::events()` (`InputEventList`, `push` and `push_text` do the
+merging, splitting and UTF-8 checks), `start_text_input()`,
+`stop_text_input()` and `text_input_active()`, plus the polled state as
+today. Positions are renderer output pixels.
+
+`apps/client/client_app.h`, what the `scraps_web` app drives:
+
+```cpp
+namespace scraps_apps {
+struct ClientOptions { std::string scene, scene_dir, connect, view; bool headless = false; long frames = 0;
+                       long threads = -1; bool hot_game = false; std::string save_dir; };
+class ClientApp {
+ public:
+  ClientApp(const ClientOptions& options, scraps::PlatformServices platform,
+            scraps::headless::HeadlessInput* autopilot /* nullptr */);
+  bool start(std::string& error);                   // game code, scene, session
+  bool frame(double now, double wall_seconds);      // false: stop (close, Esc/quit, frame limit, failure)
+  bool frame(double now);                           // real time: wall_seconds = now
+  int finish();                                     // goodbye; the exit code
+  const ClientAppStats& stats() const; bool has_ui() const; const UiModel& ui() const;
+  const scraps::Client& client() const; const scraps::Mixer& mixer() const;
+  bool paused() const; const char* view_name() const;
+};
+}
+```
+
+`scene_dir` must already be resolved (`common/scene_dir.h`, as `main.cpp`
+does); an empty `scene` means the game's default. The app keeps fixed
+buffers for the bridge (about 50 KB), so create it on the heap.
+
+**The protocol as built** (6a, with what was settled while building)
+
+- View, posted when its text changes:
+  `{"type":"view","screen":"main","game":"sandbox","hud":"coins 0","paused":false,"has_save":false,"online":false,"music_volume":1,"effects_volume":1,"notice":"","commands":["drop_coin"]}`.
+  Always every field, in this order. Numbers are the shortest form (`1`,
+  `0.75`). `notice` is `""` when none is shown, and at most 255 bytes.
+  `has_save` is false online.
+- Screens: `main` until play/continue works (nothing ticks, the network is
+  not started); `playing`; `paused` (offline: the game is paused; **online:
+  the pause menu over a running game**, `"paused":false`); `settings` (over
+  any of them; `close_settings` goes back).
+- Actions that make no sense now are ignored and counted (`ignored()`):
+  `play`/`continue` once started, `pause` outside `playing`, `resume`
+  outside `paused`, `save`/`load` on the main menu, and **`command` outside
+  `playing`** (a game button in a menu does nothing, now or later).
+  `continue` loads the quick save; if that fails, the main menu stays and the
+  notice says why. `load` resumes a paused game, as F9 does. Volumes are
+  clamped to 0..1.
+- **Esc, P and gamepad start are handled natively** while a UI is shown: Esc
+  goes playing → pause menu → playing, and settings → back; P and start only
+  toggle the pause menu. **The React app should not also send `pause` or
+  `resume` for Esc**, or it would undo the native toggle. Without a UI, Esc
+  still quits and P pauses.
+- Outside `playing`, the game controls get no input, and V, zoom, F5 and F9
+  do nothing.
+
+**Also in this part** (review findings S3 and M5 from wave 1)
+
+- Game controls get no input while paused or while a menu is shown:
+  `Controls` samples `NoInput` then. New `Controls::clear_latches()` is called
+  whenever the game gains or loses the input (resume, play, continue, a load,
+  a menu opening), so a press made while paused never acts after resuming,
+  even one made in the same frame as P.
+- Music gain = the player's music volume × the pause duck
+  (`kPauseMusicDuck` = 0.4, `common/pause.h`); effects gain = the effects
+  volume. Without a UI both volumes stay 1, so the gains are as before.
+
+**Tests** (`tests/test_ui.cpp`, 16 functions)
+
+| Test | Shows |
+|---|---|
+| `platform.event_list_keeps_order_and_counts_overflow` | 11 events of every kind in call order, two moves merged, overflow past 256 counted and polling still sees everything, one frame only |
+| `platform.text_input_is_split_and_checked` | off: no text; 100 bytes of 1- to 4-byte characters split between code points and joined back equal; invalid UTF-8 skipped; a full list counts the drop |
+| `ui.json_reader_takes_flat_objects` / `ui.json_reader_refuses_hostile_input` | escapes, surrogate pairs, numbers; 45 hostile texts and every limit refused; 20,000 damaged and random messages, never a crash |
+| `ui.json_writer_escapes_and_reads_back` | quotes, control characters, a cut character becomes `?`, reads back, never writes past its buffer |
+| `ui.actions_parse_and_odd_ones_are_refused` | every action name; malformed and unknown cases |
+| `ui.commands_are_checked_and_copied` | GameApi v3 validation, and the names copied |
+| `ui.each_action_does_what_it_says` | every action on every screen, offline and online; Esc and P; commands queued once, for the player |
+| `ui.volumes_are_not_clobbered_by_the_duck` | volume × duck, both ways |
+| `ui.view_is_posted_only_when_it_changes` | the exact first message; one post per change, none otherwise; a host that cannot post is retried |
+| `ui.malformed_messages_are_counted_not_trusted` | malformed, unknown and dropped counted; good messages still work |
+| `ui.client_app_main_menu_play_pause_save_resume_quit` | `ClientApp` with a headless UI: main menu (no ticks, one post), play, `drop_coin` sent at the next tick, pause, save (same code as F5), F5 ignored in the menu, resume, Esc in and out of the pause menu, quit, exit code 0 |
+| `ui.client_app_continue_loads_the_quick_save` | continue without a save stays on the menu; with one it loads and plays |
+| `ui.client_app_volumes_follow_the_ui` | volumes reach the mixer; P pauses and ducks; resume restores |
+| `ui.input_while_paused_or_in_a_menu_never_acts` | Space, E, click, pad south and west while paused (also in the same frame as P), on the main menu, in the pause menu and in settings: no command afterwards; the same presses while playing do send commands |
+| `ui.client_app_without_a_ui_plays_at_once` | no UI: plays at once, nothing posted, gains 1, F9 resumes a pause, Esc quits |
+
+`game.swap_runs_the_new_code` also checks that the swapped module brings its
+two UI commands (copied); `game.mismatch_is_refused` expects "(game API
+version 2, this program has 3)". `no_allocation_in_hot_path` also polls a
+headless UI, parses a malformed message and an ignored command now and
+then, publishes the unchanged view and applies the volumes every frame: 0
+allocations. Mutation checks: with the controls sampling the real input
+while paused, or without `clear_latches()`, `ui.input_while_...` fails.
+
+**Behaviour compared with `cbd2527`.** The headless client of `cbd2527`
+(built from an export of that commit) and this one print the same output
+for `isometric`, `top-down` (600 and 1,500 frames), `crowd` and `side
+--no-autopilot`. In `side` one fewer sound plays (9 instead of 10): the
+autopilot presses Space at frame 290, during its pause, and that jump no
+longer happens after resuming (finding S3). With the fix reverted the count
+is 10 again.
+
+**Deviations, and why**
+
+- The interface is `UiHost` (6a's name; part 6 said `UiBridge`), with
+  `receive(UiMessageList&)` rather than a per-message poll, so a frame's
+  messages arrive at once and in order with no allocation.
+- `ClientApp::frame(now, wall_seconds)` has a second time: the hot-reload
+  file check needs real time when `now` is simulated. `frame(now)` passes
+  `now` for both.
+- The online pause menu (screen `paused` with `"paused":false`) and native
+  Esc handling were not in 6a; they follow from "pause is offline only" and
+  "Esc opens or closes the pause menu".
+- `Key` gained four keys for text fields.
+- Without a UI, controls now ignore presses made while paused (finding S3);
+  everything else is as before.
+- With a UI the debug HUD is still drawn by the renderer; the backend or a
+  later change may hide it.
+
+**Not verified**
+
+- The sdl3 text input and event list with a real keyboard, IME and mouse:
+  only the headless paths ran. To check by hand, a small debug print of
+  `events()` in a window is enough; nothing in `scraps_client` reads the
+  list yet.
+- No WebView exists yet, so the protocol has met no real page; agent 7's
+  React app was built against 6a at the same time.

@@ -25,6 +25,8 @@ constexpr scraps::GameApi kApi = {
     0,
     nullptr,
     &tiny::hud,
+    nullptr,  // no UI commands
+    0,
 };
 
 }  // namespace

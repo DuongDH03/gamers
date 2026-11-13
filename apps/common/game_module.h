@@ -28,6 +28,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -84,6 +85,19 @@ inline bool is_valid_utf8(const std::string& text) {
   return true;
 }
 
+// True if `name` can name a UI command (GameUiCommand): 1 to 31 ASCII
+// letters, digits, '_' or '-'.
+inline bool is_ui_command_name(const char* name) {
+  if (name == nullptr || name[0] == '\0') return false;
+  for (std::size_t i = 0; name[i] != '\0'; ++i) {
+    if (i + 1 >= scraps::kGameUiCommandNameCapacity) return false;
+    const char c = name[i];
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+    if (!ok) return false;
+  }
+  return true;
+}
+
 // True if `api` can run inside this program. Otherwise `error` says why.
 // The version is read first and alone: if it differs, nothing else in the
 // struct can be trusted to be where this program expects it.
@@ -125,6 +139,25 @@ inline bool check_game_api(const scraps::GameApi* api, std::string& error) {
         binding.pad > scraps::GamepadButton::kCount || binding.command == scraps::CommandType::kNone ||
         scraps::is_server_only(binding.command)) {
       error = "input binding " + std::to_string(i) + " of the game is not valid";
+      return false;
+    }
+  }
+  if (api->ui_command_count > scraps::kMaxGameUiCommands ||
+      (api->ui_command_count > 0 && api->ui_commands == nullptr)) {
+    error = "the game has too many UI commands";
+    return false;
+  }
+  for (std::size_t i = 0; i < api->ui_command_count; ++i) {
+    // A short name of letters, digits, '_' and '-' (it travels inside JSON
+    // and is compared byte for byte), unique, for a command a client may send.
+    const scraps::GameUiCommand& command = api->ui_commands[i];
+    bool valid = is_ui_command_name(command.name) && command.command != scraps::CommandType::kNone &&
+                 !scraps::is_server_only(command.command);
+    for (std::size_t k = 0; valid && k < i; ++k) {
+      valid = std::strcmp(api->ui_commands[k].name, command.name) != 0;
+    }
+    if (!valid) {
+      error = "UI command " + std::to_string(i) + " of the game is not valid";
       return false;
     }
   }
@@ -265,6 +298,26 @@ class GameModule {
 
   const scraps::GameApi& api() const { return m_api; }
   const char* name() const { return m_name.data(); }
+
+  // The game's UI commands (GameApi version 3), copied: they stay valid
+  // across swaps until the next one, and a swap brings the new module's.
+  std::size_t ui_command_count() const { return m_ui_command_count; }
+  const scraps::GameUiCommand& ui_command(std::size_t i) const {
+    return m_ui_commands[i < m_ui_command_count ? i : 0];
+  }
+  // The command a UI names, or false if the game has none by that name
+  // (`size` bytes; the name need not be terminated).
+  bool find_ui_command(const char* name, std::size_t size, scraps::CommandType& out) const {
+    if (name == nullptr) return false;
+    for (std::size_t i = 0; i < m_ui_command_count; ++i) {
+      const char* candidate = m_ui_commands[i].name;
+      if (std::strlen(candidate) == size && std::memcmp(candidate, name, size) == 0) {
+        out = m_ui_commands[i].command;
+        return true;
+      }
+    }
+    return false;
+  }
   bool hot() const { return m_library != nullptr; }
   // The loaded copy (empty for a static game). For tests and messages.
   const std::string& live_path() const { return m_live_path; }
@@ -314,8 +367,19 @@ class GameModule {
     for (std::size_t i = 0; i + 1 < kNameCapacity && api.name[i] != '\0'; ++i) m_name[i] = api.name[i];
     m_binding_count = api.binding_count;
     for (std::size_t i = 0; i < m_binding_count; ++i) m_bindings[i] = api.bindings[i];
+    m_ui_command_count = api.ui_command_count;
+    for (std::size_t i = 0; i < m_ui_command_count; ++i) {
+      // check_game_api() made sure each name fits.
+      std::array<char, scraps::kGameUiCommandNameCapacity>& name = m_ui_names[i];
+      name.fill('\0');
+      const char* from = api.ui_commands[i].name;
+      for (std::size_t k = 0; k + 1 < name.size() && from[k] != '\0'; ++k) name[k] = from[k];
+      m_ui_commands[i].name = name.data();
+      m_ui_commands[i].command = api.ui_commands[i].command;
+    }
     m_api.name = m_name.data();
     m_api.bindings = m_bindings.data();
+    m_api.ui_commands = m_ui_commands.data();
   }
 
   // True when one of the other builds changed, at most once every
@@ -468,11 +532,15 @@ class GameModule {
     return GameReload::kReloaded;
   }
 
-  // What runs now. m_api.name and m_api.bindings point into this object.
+  // What runs now. m_api.name, m_api.bindings and m_api.ui_commands (and
+  // the names in them) point into this object.
   scraps::GameApi m_api{};
   std::array<char, kNameCapacity> m_name{};
   std::array<scraps::GameBinding, scraps::kMaxGameBindings> m_bindings{};
   std::size_t m_binding_count = 0;
+  std::array<std::array<char, scraps::kGameUiCommandNameCapacity>, scraps::kMaxGameUiCommands> m_ui_names{};
+  std::array<scraps::GameUiCommand, scraps::kMaxGameUiCommands> m_ui_commands{};
+  std::size_t m_ui_command_count = 0;
 
   // Hot only: the module the build writes, and the loaded copy of it.
   std::string m_path;
